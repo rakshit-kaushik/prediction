@@ -1,0 +1,25 @@
+# OFI Analysis for Prediction Markets
+# Replicating Cont et al. (2011) for Polymarket
+
+# HTTP client for Dome API
+requests>=2.31.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Statistical analysis
+statsmodels>=0.14.0
+scipy>=1.10.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.18.0
+
+# Web Dashboard
+streamlit>=1.29.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.65.0

@@ -1,0 +1,103 @@
+
+================================================================================
+OFI ANALYSIS SUMMARY REPORT
+================================================================================
+
+Market: Fed decreases interest rates by 25 bps after December 2025 meeting?
+Date Range: 2025-10-15 to 2025-10-31
+Duration: 16 days
+Generated: 2025-11-20 04:49:55.754044
+
+================================================================================
+DATASET OVERVIEW
+================================================================================
+
+Total Snapshots: 3,971
+Non-zero OFI Events: 513 (12.9%)
+Non-zero Price Changes: 502 (12.6%)
+
+Average Snapshots per Day: 233.6
+Unique Days: 17
+Unique Mid-Prices: 58
+
+================================================================================
+ORDER FLOW IMBALANCE (OFI) STATISTICS
+================================================================================
+
+OFI Range: -132,066.71 to 49,480.00
+Mean OFI: -6.39
+Median OFI: 0.00
+Std Dev: 2,583.40
+
+Positive OFI Events: 255 (6.4%)
+Negative OFI Events: 258 (6.5%)
+Zero OFI: 3,458 (87.1%)
+
+================================================================================
+PRICE CHANGE STATISTICS
+================================================================================
+
+ΔP Range: -0.270000 to 0.085000
+Mean ΔP: -0.000035
+Median ΔP: 0.000000
+Std Dev: 0.005755
+
+Price Range: $0.5200 to $0.9050
+Mean Price: $0.7319
+
+================================================================================
+KEY RESULT: OFI vs PRICE CHANGE RELATIONSHIP
+================================================================================
+
+Linear Regression: ΔP = β × OFI + α
+
+Slope (β): 3.613127e-07
+Intercept (α): -0.000255
+R-squared (R²): 0.0263
+Correlation: 0.1623
+P-value: 2.25e-04
+Standard Error: 9.723493e-08
+
+Interpretation:
+- SIGNIFICANT relationship at α=0.05
+- R² of 0.0263 means OFI explains 2.6% of price change variance
+- Positive price impact (β = 3.61e-07)
+
+Comparison to Cont et al. (2011):
+- Expected R²: ~50-70% (equity markets)
+- Our R²: 2.6%
+- ⚠ Outside typical range
+
+================================================================================
+MARKET MICROSTRUCTURE
+================================================================================
+
+Bid-Ask Spread:
+  Mean: 1.84%
+  Median: 1.44%
+  Range: 1.10% to 112.38%
+
+Market Depth:
+  Mean Total Depth: 2,777,829
+  Mean Bid Depth: 1,454,329
+  Mean Ask Depth: 1,323,499
+
+Best Bid/Ask:
+  Bid Range: $0.2300 to $0.9000
+  Ask Range: $0.6400 to $0.9100
+
+================================================================================
+OUTPUT FILES
+================================================================================
+
+Phase 1: results/ofi_analysis_phase1_quality.png
+Phase 2: results/ofi_analysis_phase2_overview.png
+Phase 3: results/ofi_analysis_phase3_core.png (KEY RESULTS)
+Phase 4: results/ofi_analysis_phase4_orderbook.png
+Phase 5: results/ofi_analysis_phase5_intraday.png
+
+This Report: results/summary_statistics.txt
+
+================================================================================
+END OF REPORT
+================================================================================

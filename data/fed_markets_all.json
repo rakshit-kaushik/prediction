@@ -1,0 +1,93 @@
+[
+  {
+    "market_slug": "will-the-feds-upper-bound-reach-5pt0-or-higher-before-2027-783",
+    "title": "Will the Fed\u2019s upper bound reach 5.0% or higher before 2027?",
+    "condition_id": "0x0a95717208bdb1c1167877eb5b19085494f68ed9b074d8dfc7d76b549fcbe7bb",
+    "start_time": 1763498295,
+    "end_time": 1798675200,
+    "completed_time": null,
+    "close_time": null,
+    "tags": [],
+    "volume_1_week": 3.0832999999999995,
+    "volume_1_month": 3.0832999999999995,
+    "volume_1_year": 3.0832999999999995,
+    "volume_total": 45,
+    "resolution_source": "",
+    "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/fed-rate-cut-in-2025-8aDiUiuri3_D.jpg",
+    "side_a": {
+      "id": "97074613377364157146536275618954700131815815082975930040025951399535510211743",
+      "label": "Yes"
+    },
+    "side_b": {
+      "id": "29757683089125131854278711382173326661055338509428068229468982779247847262156",
+      "label": "No"
+    },
+    "winning_side": null,
+    "status": "open"
+  },
+  {
+    "market_slug": "will-the-feds-upper-bound-reach-5pt5-or-higher-before-2027-767",
+    "title": "Will the Fed\u2019s upper bound reach 5.5% or higher before 2027?",
+    "condition_id": "0x360247ba6b67009d19be741be7187abd59c5005e14be0914eb4e485f3b342c40",
+    "start_time": 1763498293,
+    "end_time": 1798675200,
+    "completed_time": null,
+    "close_time": null,
+    "tags": [
+      "Jerome Powell",
+      "Macro Indicators",
+      "Economy",
+      "Politics",
+      "Economic Policy",
+      "Fed",
+      "Fed Rates"
+    ],
+    "volume_1_week": 3.0832999999999995,
+    "volume_1_month": 3.0832999999999995,
+    "volume_1_year": 3.0832999999999995,
+    "volume_total": 3.0833,
+    "resolution_source": "",
+    "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/fed-rate-cut-in-2025-8aDiUiuri3_D.jpg",
+    "side_a": {
+      "id": "1957967982198906541602151427829676498454654437543616372720941344253767314713",
+      "label": "Yes"
+    },
+    "side_b": {
+      "id": "38431667096858127059709125406238641505213119973736715328032699950837107906467",
+      "label": "No"
+    },
+    "winning_side": null,
+    "status": "open"
+  },
+  {
+    "market_slug": "will-craig-federighi-be-the-next-ceo-of-apple",
+    "title": "Will Craig Federighi be the next CEO of Apple?",
+    "condition_id": "0x21c9a70d8cb47541cc7d6f09f18437371dd3b375c945f73dd294484ad09d48e9",
+    "start_time": 1763496785,
+    "end_time": 1798675200,
+    "completed_time": null,
+    "close_time": null,
+    "tags": [
+      "Big Tech",
+      "Business",
+      "Apple",
+      "Tech"
+    ],
+    "volume_1_week": 18,
+    "volume_1_month": 18,
+    "volume_1_year": 18,
+    "volume_total": 28,
+    "resolution_source": "",
+    "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/next-ceo-of-apple-leUfWn-_USCO.jpg",
+    "side_a": {
+      "id": "31832053282183995733509896156372118422868125290363817803638364211881551894164",
+      "label": "Yes"
+    },
+    "side_b": {
+      "id": "64234883362351032816057646578145654544007067218745735549357405251553671047240",
+      "label": "No"
+    },
+    "winning_side": null,
+    "status": "open"
+  }
+]

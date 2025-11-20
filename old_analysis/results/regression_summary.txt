@@ -1,0 +1,67 @@
+================================================================================
+OFI ANALYSIS SUMMARY
+Replicating Cont, Kukanov & Stoikov (2011)
+================================================================================
+
+DATA SUMMARY
+--------------------------------------------------------------------------------
+Total snapshots: 5,391
+Time range: 2025-11-01 00:00:15.531000 to 2025-11-01 23:59:58.481000
+
+OFI STATISTICS
+--------------------------------------------------------------------------------
+Mean: 0.12
+Std:  59.30
+Min:  -2,094.00
+Max:  2,094.00
+
+PRICE CHANGE STATISTICS
+--------------------------------------------------------------------------------
+Mean ΔP: 0.000000
+Std ΔP:  0.000000
+Non-zero changes: 0 / 5391
+
+REGRESSION RESULTS: ΔP = β × OFI + ε
+--------------------------------------------------------------------------------
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:                      y   R-squared:                         nan
+Model:                            OLS   Adj. R-squared:                    nan
+Method:                 Least Squares   F-statistic:                       nan
+Date:                Wed, 19 Nov 2025   Prob (F-statistic):                nan
+Time:                        18:28:34   Log-Likelihood:                    inf
+No. Observations:                5391   AIC:                              -inf
+Df Residuals:                    5389   BIC:                              -inf
+Df Model:                           1                                         
+Covariance Type:            nonrobust                                         
+==============================================================================
+                 coef    std err          t      P>|t|      [0.025      0.975]
+------------------------------------------------------------------------------
+const               0          0        nan        nan           0           0
+x1                  0          0        nan        nan           0           0
+==============================================================================
+Omnibus:                          nan   Durbin-Watson:                     nan
+Prob(Omnibus):                    nan   Jarque-Bera (JB):                  nan
+Skew:                             nan   Prob(JB):                          nan
+Kurtosis:                         nan   Cond. No.                         59.3
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+
+COMPARISON TO CONT ET AL. (2011)
+--------------------------------------------------------------------------------
+Our R²:              nan
+Cont et al. R²:      ~0.65
+Our β:               0.000000e+00
+Cont et al. β:       > 0 (positive impact)
+
+DEPTH RELATIONSHIP: β = c / Depth^λ
+--------------------------------------------------------------------------------
+Our λ:               -0.0000
+Cont et al. λ:       ~1.0
+
+CONCLUSIONS
+--------------------------------------------------------------------------------
+✅ Relationship found between OFI and price changes
+   R² = nan indicates OFI explains nan% of price variance
