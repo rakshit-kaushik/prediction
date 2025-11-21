@@ -169,10 +169,10 @@ def main():
     print("╚" + "═" * 78 + "╝")
 
     # Load corrected orderbook data
-    print("\n📂 Loading orderbook data...")
-    df = pd.read_csv('data/orderbook_fed_oct15_31_processed_CORRECT.csv')
+    print("\nLoading orderbook data...")
+    df = pd.read_csv('data/orderbook_nov01_20_processed.csv')
     df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
-    print(f"✅ Loaded {len(df)} snapshots")
+    print(f"Loaded {len(df)} snapshots")
 
     # Calculate OFI
     df_ofi = calculate_ofi(df)
@@ -196,9 +196,9 @@ def main():
     ]
 
     df_output = df_ofi[output_cols]
-    output_file = 'data/ofi_results.csv'
+    output_file = 'data/ofi_nov01_20_results.csv'
     df_output.to_csv(output_file, index=False)
-    print(f"\n💾 Saved to: {output_file}")
+    print(f"\nSaved to: {output_file}")
     print(f"   Rows: {len(df_output)}")
     print(f"   Columns: {len(output_cols)}")
 

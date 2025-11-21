@@ -24,8 +24,8 @@ TOKEN_ID = None
 # ============================================================================
 
 # Format: "YYYY-MM-DD"
-START_DATE = "2025-10-15"
-END_DATE = "2025-10-31"
+START_DATE = "2025-11-01"
+END_DATE = "2025-11-20"
 
 # ============================================================================
 # API CONFIGURATION
@@ -48,10 +48,10 @@ POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 MARKET_INFO_FILE = "data/market_info.json"
 
 # Where to save raw orderbook data
-RAW_ORDERBOOK_FILE = "data/orderbook_raw.json"
+RAW_ORDERBOOK_FILE = "data/orderbook_nov01_20_raw.json"
 
 # Where to save processed orderbook data
-PROCESSED_ORDERBOOK_FILE = "data/orderbook_processed.csv"
+PROCESSED_ORDERBOOK_FILE = "data/orderbook_nov01_20_processed.csv"
 
 # ============================================================================
 # DOWNLOAD SETTINGS
