@@ -597,14 +597,15 @@ def main():
         st.stop()
 
     # Main content area - tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "Price & Depth",
         "OFI Analysis",
         "Intraday Patterns",
         "Summary Stats",
         "Research Results",
         "Depth & Events",
-        "Figures Gallery"
+        "Figures Gallery",
+        "Time to Expiry"
     ])
 
     with tab1:
@@ -807,6 +808,103 @@ def main():
                     st.caption(f"File: `results/figures/{filename}`")
                 else:
                     st.warning(f"Figure not found. Run: `python scripts/run_all_analyses.py`")
+
+    # ========================================================================
+    # TIME TO EXPIRY ANALYSIS TAB
+    # ========================================================================
+
+    with tab8:
+        st.subheader("Time-to-Expiry Analysis: NYC Mayoral Election")
+
+        st.info("""
+        **How does the OFI-price relationship change as the market approaches expiry?**
+
+        This analysis examines the last 2-3 hours before the NYC Mayoral Election results
+        compared to earlier periods. Only closed markets are analyzed.
+        """)
+
+        # Load time-to-expiry analysis
+        tte_file = ANALYSIS_DIR / "NYC_time_to_expiry_analysis.csv"
+        if tte_file.exists():
+            tte_df = pd.read_csv(tte_file)
+
+            # Display summary metrics
+            st.markdown("### Key Findings")
+
+            last_2h = tte_df[tte_df['segment'] == 'Last 2 hours'].iloc[0]
+            rest = tte_df[tte_df['segment'] != 'Last 2 hours']
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                beta_change = (last_2h['beta'] / rest['beta'].mean() - 1) * 100
+                st.metric(
+                    "Beta Change (Last 2h)",
+                    f"+{beta_change:.1f}%",
+                    delta="vs earlier periods",
+                    help="Price impact coefficient increased by this much in final 2 hours"
+                )
+
+            with col2:
+                st.metric(
+                    "R² (Last 2h)",
+                    f"{last_2h['r_squared']:.3f}",
+                    delta=f"+{(last_2h['r_squared'] - rest['r_squared'].mean()):.3f}",
+                    help="OFI explains 25.6% of price variance in final 2 hours vs 9.6% earlier"
+                )
+
+            with col3:
+                depth_change = (last_2h['avg_depth'] / rest['avg_depth'].mean() - 1) * 100
+                st.metric(
+                    "Liquidity Change",
+                    f"{depth_change:.1f}%",
+                    delta="depth decrease",
+                    delta_color="inverse",
+                    help="Market depth decreased 56% in final 2 hours"
+                )
+
+            with col4:
+                st.metric(
+                    "Observations",
+                    f"{last_2h['n_obs']:.0f}",
+                    help="Number of snapshots in final 2 hours"
+                )
+
+            # Display full table
+            st.markdown("### Beta Evolution by Time Period")
+
+            # Format the dataframe for display
+            display_df = tte_df[['segment', 'n_obs', 'beta', 'r_squared', 'correlation', 'avg_depth']].copy()
+            display_df.columns = ['Period', 'N Obs', 'Beta', 'R²', 'Correlation', 'Avg Depth']
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            # Show interpretation
+            st.markdown("### Interpretation")
+            st.markdown(f"""
+            **Price Impact Intensifies Near Expiry:**
+            - Beta increases by **{beta_change:.0f}%** in final 2 hours
+            - R² increases from {rest['r_squared'].mean():.1%} to {last_2h['r_squared']:.1%}
+            - Despite **{abs(depth_change):.0f}%** drop in liquidity, OFI becomes MORE predictive
+
+            **Implications:**
+            1. **Informed Trading**: Last-minute traders likely have better information
+            2. **Market Efficiency**: Order flow information matters more near resolution
+            3. **Liquidity Withdrawal**: Market makers pull out, increasing price impact per unit OFI
+            4. **Trading Strategy**: OFI signals are strongest in final hours before market close
+            """)
+
+            # Show visualization
+            st.markdown("### Visualization")
+            fig_img = load_figure_image("figure_7_NYC_time_to_expiry.png")
+            if fig_img:
+                st.image(fig_img, caption="Figure 7: OFI Price Impact Near Market Expiry", use_column_width=True)
+                st.caption("File: `results/figures/figure_7_NYC_time_to_expiry.png`")
+            else:
+                st.warning("Figure not found. Run: `python scripts/07_time_to_expiry_analysis.py`")
+
+        else:
+            st.warning("Time-to-expiry analysis not found. Run: `python scripts/07_time_to_expiry_analysis.py`")
 
 
 if __name__ == "__main__":
