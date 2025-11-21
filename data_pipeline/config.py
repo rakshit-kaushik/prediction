@@ -13,19 +13,19 @@ Modify these settings for your market and date range.
 # Market slug from Polymarket URL
 # Example: https://polymarket.com/event/fed-decreases-interest-rates...
 #          → slug = "fed-decreases-interest-rates-by-25-bps-after-december-2025-meeting"
-MARKET_SLUG = "fed-decreases-interest-rates-by-25-bps-after-december-2025-meeting"
+MARKET_SLUG = "will-zohran-mamdani-win-the-2025-nyc-mayoral-election"
 
 # Optional: If you already know the token ID, set it here (otherwise leave None)
 # The pipeline will find it automatically if None
-TOKEN_ID = None
+TOKEN_ID = "33945469250963963541781051637999677727672635213493648594066577298999471399137"
 
 # ============================================================================
 # DATE RANGE
 # ============================================================================
 
 # Format: "YYYY-MM-DD"
-START_DATE = "2025-11-01"
-END_DATE = "2025-11-20"
+START_DATE = "2025-10-15"
+END_DATE = "2025-11-04"
 
 # ============================================================================
 # API CONFIGURATION
@@ -45,13 +45,13 @@ POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 # ============================================================================
 
 # Where to save market info
-MARKET_INFO_FILE = "data/market_info.json"
+MARKET_INFO_FILE = "data/nyc_mayor_market_info.json"
 
 # Where to save raw orderbook data
-RAW_ORDERBOOK_FILE = "data/orderbook_nov01_20_raw.json"
+RAW_ORDERBOOK_FILE = "data/nyc_mayor_oct15_nov04_raw.json"
 
 # Where to save processed orderbook data
-PROCESSED_ORDERBOOK_FILE = "data/orderbook_nov01_20_processed.csv"
+PROCESSED_ORDERBOOK_FILE = "data/nyc_mayor_oct15_nov04_processed.csv"
 
 # ============================================================================
 # DOWNLOAD SETTINGS

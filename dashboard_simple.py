@@ -42,6 +42,13 @@ MARKETS = {
         "market_info_file": "market_info.json",
         "description": "Fed decreases interest rates by 25 bps after December 2025 meeting?",
         "date_range": ("2025-10-15", "2025-11-20")
+    },
+    "NYC Mayoral Election 2025 (Zohran Mamdani)": {
+        "ofi_file": "nyc_mayor_oct15_nov04_ofi.csv",
+        "orderbook_file": "nyc_mayor_oct15_nov04_processed.csv",
+        "market_info_file": "nyc_mayor_market_info.json",
+        "description": "Will Zohran Mamdani win the 2025 NYC mayoral election?",
+        "date_range": ("2025-10-15", "2025-11-04")
     }
 }
 

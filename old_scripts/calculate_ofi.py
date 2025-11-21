@@ -170,7 +170,7 @@ def main():
 
     # Load corrected orderbook data
     print("\nLoading orderbook data...")
-    df = pd.read_csv('data/orderbook_nov01_20_processed.csv')
+    df = pd.read_csv('data/nyc_mayor_oct15_nov04_processed.csv')
     df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
     print(f"Loaded {len(df)} snapshots")
 
@@ -196,7 +196,7 @@ def main():
     ]
 
     df_output = df_ofi[output_cols]
-    output_file = 'data/ofi_nov01_20_results.csv'
+    output_file = 'data/nyc_mayor_oct15_nov04_ofi.csv'
     df_output.to_csv(output_file, index=False)
     print(f"\nSaved to: {output_file}")
     print(f"   Rows: {len(df_output)}")
