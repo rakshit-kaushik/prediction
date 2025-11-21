@@ -498,7 +498,7 @@ def main():
         layout="wide"
     )
 
-    st.title("📊 OFI Analysis Dashboard")
+    st.title("OFI Analysis Dashboard")
     st.markdown("**Data exploration + Complete Cont et al. (2011) replication results**")
 
     # Sidebar - Market Selection
@@ -602,9 +602,9 @@ def main():
         "OFI Analysis",
         "Intraday Patterns",
         "Summary Stats",
-        "📊 Research Results",
-        "📉 Depth & Events",
-        "🖼️ Figures Gallery"
+        "Research Results",
+        "Depth & Events",
+        "Figures Gallery"
     ])
 
     with tab1:
@@ -663,7 +663,7 @@ def main():
     # ========================================================================
 
     with tab5:
-        st.subheader("📊 Research Results - Cont et al. (2011) Replication")
+        st.subheader("Research Results - Cont et al. (2011) Replication")
 
         st.info("""
         **Complete replication of "The Price Impact of Order Book Events"**
@@ -676,7 +676,7 @@ def main():
         research_tables = load_research_tables()
 
         # Display tables in expanders
-        with st.expander("📈 Table 2: Regression Analysis", expanded=True):
+        with st.expander("Table 2: Regression Analysis", expanded=True):
             if research_tables['regression'] is not None:
                 st.markdown("**Linear Model:** ΔP = α + β × OFI + ε")
                 st.dataframe(research_tables['regression'], use_container_width=True, hide_index=True)
@@ -693,7 +693,7 @@ def main():
             else:
                 st.warning("Run: `python scripts/01_regression_analysis.py`")
 
-        with st.expander("⚖️ Table 5: OFI vs Trade Imbalance"):
+        with st.expander("Table 5: OFI vs Trade Imbalance"):
             if research_tables['ti_comparison'] is not None:
                 st.markdown("**Horse-Race Regressions:** Which predicts price better?")
                 st.dataframe(research_tables['ti_comparison'], use_container_width=True, hide_index=True)
@@ -708,7 +708,7 @@ def main():
                     improvement = df['R2_Improvement'].mean() * 100
                     st.metric("TI Adds", f"{improvement:.2f}%")
 
-                st.success("✅ **Result:** OFI dominates trade imbalance (consistent with paper)")
+                st.success("**Result:** OFI dominates trade imbalance (consistent with paper)")
             else:
                 st.warning("Run: `python scripts/06_trade_volume_analysis.py`")
 
@@ -723,7 +723,7 @@ def main():
     # ========================================================================
 
     with tab6:
-        st.subheader("📉 Depth Analysis & Event Patterns")
+        st.subheader("Depth Analysis & Event Patterns")
 
         research_tables = load_research_tables()
 
@@ -743,7 +743,7 @@ def main():
                     close_to_one = (np.abs(df['Power_Law_lambda'] - 1.0) < 0.3).sum()
                     st.metric("Close to Paper", f"{close_to_one}/{len(df)}")
 
-                st.info("⚠️ Prediction markets show weaker depth relationship than equities")
+                st.info("Prediction markets show weaker depth relationship than equities")
             else:
                 st.warning("Run: `python scripts/04_depth_analysis.py`")
 
@@ -758,7 +758,7 @@ def main():
                 st.metric("Avg Variance Explained", f"{avg_explained:.1f}%")
 
                 st.warning(f"""
-                📊 **Key Finding:** OFI explains only **{avg_explained:.1f}%** of price variance
+                **Key Finding:** OFI explains only **{avg_explained:.1f}%** of price variance
                 (vs **65%** in equity markets).
 
                 → Prediction markets are more **news-driven** than orderbook-driven.
@@ -783,7 +783,7 @@ def main():
     # ========================================================================
 
     with tab7:
-        st.subheader("🖼️ Publication Figures Gallery")
+        st.subheader("Publication Figures Gallery")
 
         st.markdown("""
         All publication-quality figures (300 DPI PNG + PDF vectors).
@@ -804,7 +804,7 @@ def main():
                 img = load_figure_image(filename)
                 if img:
                     st.image(img, caption=caption, use_column_width=True)
-                    st.caption(f"📁 File: `results/figures/{filename}`")
+                    st.caption(f"File: `results/figures/{filename}`")
                 else:
                     st.warning(f"Figure not found. Run: `python scripts/run_all_analyses.py`")
 
