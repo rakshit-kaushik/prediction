@@ -39,7 +39,7 @@ DATA_FILE = "data/ofi_results.csv"
 MARKET_INFO_FILE = "data/market_info.json"
 
 # Output directory
-OUTPUT_DIR = "results"
+OUTPUT_DIR = "data"
 
 # Plot styling
 STYLE = 'whitegrid'

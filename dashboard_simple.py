@@ -36,26 +36,12 @@ DATA_DIR = Path("data")
 
 # Pre-configured markets
 MARKETS = {
-    "Fed Rate Decision (Dec 2025) - Full Period (Oct 15 - Nov 20)": {
+    "Fed Rate Decision (Dec 2025)": {
         "ofi_file": "ofi_oct15_nov20_combined.csv",
         "orderbook_file": "orderbook_oct15_nov20_combined.csv",
         "market_info_file": "market_info.json",
         "description": "Fed decreases interest rates by 25 bps after December 2025 meeting?",
         "date_range": ("2025-10-15", "2025-11-20")
-    },
-    "Fed Rate Decision (Dec 2025) - Oct 15-31": {
-        "ofi_file": "ofi_results.csv",
-        "orderbook_file": "orderbook_fed_oct15_31_processed.csv",
-        "market_info_file": "market_info.json",
-        "description": "Fed decreases interest rates by 25 bps after December 2025 meeting?",
-        "date_range": ("2025-10-15", "2025-10-31")
-    },
-    "Fed Rate Decision (Dec 2025) - Nov 01-20": {
-        "ofi_file": "ofi_nov01_20_results.csv",
-        "orderbook_file": "orderbook_nov01_20_processed.csv",
-        "market_info_file": "market_info.json",
-        "description": "Fed decreases interest rates by 25 bps after December 2025 meeting?",
-        "date_range": ("2025-11-01", "2025-11-20")
     }
 }
 
@@ -540,6 +526,15 @@ def main():
         # Combine date and time
         start_datetime = datetime.combine(start_date_only, start_time)
         end_datetime = datetime.combine(end_date_only, end_time)
+
+        # Validation: ensure start is before end
+        if start_datetime >= end_datetime:
+            st.error("Start date/time must be before end date/time")
+            st.stop()
+
+        # Clamp to data boundaries
+        start_datetime = max(start_datetime, min_date.replace(tzinfo=None))
+        end_datetime = min(end_datetime, max_date.replace(tzinfo=None))
 
         st.divider()
 
