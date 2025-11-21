@@ -27,12 +27,17 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+from PIL import Image
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
 DATA_DIR = Path("data")
+RESULTS_DIR = Path("results")
+TABLES_DIR = RESULTS_DIR / "tables"
+FIGURES_DIR = RESULTS_DIR / "figures"
+ANALYSIS_DIR = RESULTS_DIR / "analysis"
 
 # Pre-configured markets
 MARKETS = {
@@ -118,6 +123,39 @@ def filter_by_date(df, start_date, end_date):
 
     mask = (df['timestamp'] >= start_date_utc) & (df['timestamp'] <= end_date_utc)
     return df[mask].copy()
+
+
+# ============================================================================
+# RESEARCH DATA LOADING (NEW!)
+# ============================================================================
+
+@st.cache_data
+def load_research_tables():
+    """Load all research tables"""
+    tables = {}
+    table_files = {
+        'regression': 'table_2_regression_statistics.csv',
+        'depth': 'table_3_depth_analysis.csv',
+        'variance': 'table_4_variance_decomposition.csv',
+        'ti_comparison': 'table_5_ofi_ti_comparison.csv'
+    }
+
+    for key, filename in table_files.items():
+        file_path = TABLES_DIR / filename
+        if file_path.exists():
+            tables[key] = pd.read_csv(file_path)
+        else:
+            tables[key] = None
+
+    return tables
+
+@st.cache_data
+def load_figure_image(filename):
+    """Load a figure image"""
+    file_path = FIGURES_DIR / filename
+    if file_path.exists():
+        return Image.open(file_path)
+    return None
 
 
 # ============================================================================
@@ -456,12 +494,12 @@ def calculate_summary_stats(ofi_df, orderbook_df):
 
 def main():
     st.set_page_config(
-        page_title="OFI Analysis Explorer",
+        page_title="OFI Analysis Dashboard - Cont et al. (2011) Replication",
         layout="wide"
     )
 
-    st.title("OFI Analysis Explorer")
-    st.markdown("**Fast data exploration using pre-existing market data**")
+    st.title("📊 OFI Analysis Dashboard")
+    st.markdown("**Data exploration + Complete Cont et al. (2011) replication results**")
 
     # Sidebar - Market Selection
     with st.sidebar:
@@ -559,11 +597,14 @@ def main():
         st.stop()
 
     # Main content area - tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Price & Depth",
         "OFI Analysis",
         "Intraday Patterns",
-        "Summary Stats"
+        "Summary Stats",
+        "📊 Research Results",
+        "📉 Depth & Events",
+        "🖼️ Figures Gallery"
     ])
 
     with tab1:
@@ -616,6 +657,156 @@ def main():
         # Raw data preview
         with st.expander("View Raw Data"):
             st.dataframe(filtered_ofi.head(100), use_container_width=True)
+
+    # ========================================================================
+    # NEW RESEARCH RESULTS TAB
+    # ========================================================================
+
+    with tab5:
+        st.subheader("📊 Research Results - Cont et al. (2011) Replication")
+
+        st.info("""
+        **Complete replication of "The Price Impact of Order Book Events"**
+
+        This tab shows all results from our paper replication analysis.
+        Run `python scripts/run_all_analyses.py` to generate all results.
+        """)
+
+        # Load all research tables
+        research_tables = load_research_tables()
+
+        # Display tables in expanders
+        with st.expander("📈 Table 2: Regression Analysis", expanded=True):
+            if research_tables['regression'] is not None:
+                st.markdown("**Linear Model:** ΔP = α + β × OFI + ε")
+                st.dataframe(research_tables['regression'], use_container_width=True, hide_index=True)
+
+                col1, col2, col3 = st.columns(3)
+                df = research_tables['regression']
+                with col1:
+                    st.metric("Avg R²", f"{df['R_squared'].mean():.4f}")
+                with col2:
+                    st.metric("Avg Correlation", f"{df['Correlation'].mean():.4f}")
+                with col3:
+                    sig_count = (df['p_Beta'] < 0.05).sum()
+                    st.metric("Significant Markets", f"{sig_count}/{len(df)}")
+            else:
+                st.warning("Run: `python scripts/01_regression_analysis.py`")
+
+        with st.expander("⚖️ Table 5: OFI vs Trade Imbalance"):
+            if research_tables['ti_comparison'] is not None:
+                st.markdown("**Horse-Race Regressions:** Which predicts price better?")
+                st.dataframe(research_tables['ti_comparison'], use_container_width=True, hide_index=True)
+
+                df = research_tables['ti_comparison']
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Avg OFI R²", f"{df['R2_OFI'].mean():.4f}")
+                with col2:
+                    st.metric("Avg TI R²", f"{df['R2_TI'].mean():.4f}")
+                with col3:
+                    improvement = df['R2_Improvement'].mean() * 100
+                    st.metric("TI Adds", f"{improvement:.2f}%")
+
+                st.success("✅ **Result:** OFI dominates trade imbalance (consistent with paper)")
+            else:
+                st.warning("Run: `python scripts/06_trade_volume_analysis.py`")
+
+        # Show scatter plot
+        st.subheader("OFI vs Price Change")
+        scatter_img = load_figure_image("figure_2_combined_comparison.png")
+        if scatter_img:
+            st.image(scatter_img, caption="Figure 2: OFI vs Price Change Scatter Plots", use_column_width=True)
+
+    # ========================================================================
+    # DEPTH & EVENTS TAB
+    # ========================================================================
+
+    with tab6:
+        st.subheader("📉 Depth Analysis & Event Patterns")
+
+        research_tables = load_research_tables()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Table 3: Depth Analysis")
+            if research_tables['depth'] is not None:
+                st.markdown("**Power Law:** β = a / AD^λ")
+                st.dataframe(research_tables['depth'], use_container_width=True, hide_index=True)
+
+                df = research_tables['depth']
+                m1, m2 = st.columns(2)
+                with m1:
+                    st.metric("Avg λ", f"{df['Power_Law_lambda'].mean():.3f}", help="Paper: ~1.0")
+                with m2:
+                    close_to_one = (np.abs(df['Power_Law_lambda'] - 1.0) < 0.3).sum()
+                    st.metric("Close to Paper", f"{close_to_one}/{len(df)}")
+
+                st.info("⚠️ Prediction markets show weaker depth relationship than equities")
+            else:
+                st.warning("Run: `python scripts/04_depth_analysis.py`")
+
+        with col2:
+            st.markdown("### Table 4: Variance Decomposition")
+            if research_tables['variance'] is not None:
+                st.markdown("**How much price variance is explained by OFI?**")
+                st.dataframe(research_tables['variance'], use_container_width=True, hide_index=True)
+
+                df = research_tables['variance']
+                avg_explained = df['Pct_Explained'].mean()
+                st.metric("Avg Variance Explained", f"{avg_explained:.1f}%")
+
+                st.warning(f"""
+                📊 **Key Finding:** OFI explains only **{avg_explained:.1f}%** of price variance
+                (vs **65%** in equity markets).
+
+                → Prediction markets are more **news-driven** than orderbook-driven.
+                """)
+            else:
+                st.warning("Run: `python scripts/05_event_analysis.py`")
+
+        # Show depth figure
+        st.subheader("Depth Analysis Visualization")
+        depth_img = load_figure_image("figure_4_depth_analysis.png")
+        if depth_img:
+            st.image(depth_img, caption="Figure 4: β vs Average Depth (Power Law)", use_column_width=True)
+
+        # Show event analysis
+        st.subheader("Event Pattern Analysis")
+        event_img = load_figure_image("figure_5_event_analysis.png")
+        if event_img:
+            st.image(event_img, caption="Figure 5: Orderbook Event Patterns", use_column_width=True)
+
+    # ========================================================================
+    # FIGURES GALLERY TAB
+    # ========================================================================
+
+    with tab7:
+        st.subheader("🖼️ Publication Figures Gallery")
+
+        st.markdown("""
+        All publication-quality figures (300 DPI PNG + PDF vectors).
+        Download from `results/figures/` directory.
+        """)
+
+        figures = [
+            ("figure_2_combined_comparison.png", "Figure 2: OFI vs Price Change"),
+            ("figure_3_Fed_residual_diagnostics.png", "Figure 3a: Fed Residual Diagnostics"),
+            ("figure_3_NYC_residual_diagnostics.png", "Figure 3b: NYC Residual Diagnostics"),
+            ("figure_4_depth_analysis.png", "Figure 4: Depth Analysis"),
+            ("figure_5_event_analysis.png", "Figure 5: Event Patterns"),
+            ("figure_6_ofi_ti_comparison.png", "Figure 6: OFI vs TI Comparison"),
+        ]
+
+        for filename, caption in figures:
+            with st.expander(caption, expanded=False):
+                img = load_figure_image(filename)
+                if img:
+                    st.image(img, caption=caption, use_column_width=True)
+                    st.caption(f"📁 File: `results/figures/{filename}`")
+                else:
+                    st.warning(f"Figure not found. Run: `python scripts/run_all_analyses.py`")
 
 
 if __name__ == "__main__":
