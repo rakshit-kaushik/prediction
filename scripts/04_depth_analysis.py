@@ -25,6 +25,66 @@ from scipy import stats, optimize
 import warnings
 warnings.filterwarnings('ignore')
 
+# ============================================================================
+# 10-SECOND TIME AGGREGATION
+# ============================================================================
+
+def aggregate_to_10_seconds(df):
+    """
+    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Cont et al. (2011) methodology.
+    """
+    if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp_ms'], unit='ms', utc=True)
+    elif 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
+    else:
+        raise ValueError("No timestamp column found")
+
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['time_bin'] = df['timestamp'].dt.floor('10T')
+
+    agg_dict = {
+        'ofi': 'sum',
+        'mid_price': ['first', 'last'],
+        'total_depth': 'mean',
+        'spread': 'mean',
+        'spread_pct': 'mean',
+        'best_bid_price': 'last',
+        'best_ask_price': 'last',
+        'best_bid_size': 'last',
+        'best_ask_size': 'last',
+        'total_bid_size': 'mean',
+        'total_ask_size': 'mean'
+    }
+
+    for col in ['bid_up', 'bid_down', 'ask_up', 'ask_down']:
+        if col in df.columns:
+            agg_dict[col] = 'max'
+
+    aggregated = df.groupby('time_bin').agg(agg_dict).reset_index()
+    # Flatten multi-level column names
+    # For multi-index columns: ('col', 'agg') -> 'col' if single agg, else 'col_agg'
+    new_cols = []
+    for col in aggregated.columns:
+        if isinstance(col, tuple):
+            if col[1] and col[0] in ['mid_price']:  # Keep aggregation suffix for multi-agg columns
+                new_cols.append('_'.join(col))
+            elif col[1]:  # Single aggregation - drop suffix
+                new_cols.append(col[0])
+            else:  # No aggregation (like time_bin)
+                new_cols.append(col[0])
+        else:
+            new_cols.append(col)
+    aggregated.columns = new_cols
+
+    aggregated['mid_price'] = aggregated['mid_price_last']
+    aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
+    aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
+    aggregated = aggregated.drop(columns=['mid_price_first', 'mid_price_last'], errors='ignore')
+
+    return aggregated
+
 # Set style
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 8)
@@ -67,7 +127,7 @@ def rolling_regression(df, window_size=500, min_obs=100):
     results = []
 
     # Sort by timestamp
-    df = df.sort_values('timestamp_ms').reset_index(drop=True)
+    df = df.sort_values('timestamp').reset_index(drop=True)
 
     n = len(df)
     step = window_size // 2  # 50% overlap for smoother estimates
@@ -113,8 +173,6 @@ def rolling_regression(df, window_size=500, min_obs=100):
             results.append({
                 'window_start': window_df['timestamp'].iloc[0],
                 'window_end': window_df['timestamp'].iloc[-1],
-                'window_start_ms': window_df['timestamp_ms'].iloc[0],
-                'window_end_ms': window_df['timestamp_ms'].iloc[-1],
                 'beta': beta_slope,
                 'alpha': alpha_hat,
                 'se_beta': se_beta,
@@ -188,6 +246,7 @@ def analyze_market_depth(market_name, config):
     ofi_file = Path(config['ofi_file'])
     print(f"Loading: {ofi_file}")
     df = pd.read_csv(ofi_file)
+    df = aggregate_to_10_seconds(df)
 
     # Convert timestamp
     if 'timestamp' not in df.columns:

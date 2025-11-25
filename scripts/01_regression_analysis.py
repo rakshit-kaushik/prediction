@@ -22,6 +22,96 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ============================================================================
+# 10-SECOND TIME AGGREGATION
+# ============================================================================
+
+def aggregate_to_10_seconds(df):
+    """
+    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Cont et al. (2011) methodology.
+
+    Key aggregations:
+    - OFI: Sum over 10-minute window
+    - Price change: P(end) - P(start) of window
+    - Depth/Spread: Average over window
+    - Events: Max (occurred if any event in window)
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Raw OFI data with timestamp column
+
+    Returns:
+    --------
+    pd.DataFrame
+        Aggregated data at 10-minute intervals
+    """
+    # Ensure timestamp is datetime
+    if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp_ms'], unit='ms', utc=True)
+    elif 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
+    else:
+        raise ValueError("No timestamp column found")
+
+    # Sort by timestamp
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    # Create 10-minute bins
+    df['time_bin'] = df['timestamp'].dt.floor('10T')
+
+    # Define aggregation rules
+    agg_dict = {
+        'ofi': 'sum',  # Sum OFI over window (CRITICAL per Cont et al.)
+        'mid_price': ['first', 'last'],  # Get first and last for price change
+        'total_depth': 'mean',  # Average depth
+        'spread': 'mean',  # Average spread
+        'spread_pct': 'mean',
+        'best_bid_price': 'last',
+        'best_ask_price': 'last',
+        'best_bid_size': 'last',
+        'best_ask_size': 'last',
+        'total_bid_size': 'mean',
+        'total_ask_size': 'mean'
+    }
+
+    # Add event indicators if they exist
+    for col in ['bid_up', 'bid_down', 'ask_up', 'ask_down']:
+        if col in df.columns:
+            agg_dict[col] = 'max'  # Event occurred if any event in window
+
+    # Perform aggregation
+    aggregated = df.groupby('time_bin').agg(agg_dict).reset_index()
+
+    # Flatten multi-level column names
+    # For multi-index columns: ('col', 'agg') -> 'col' if single agg, else 'col_agg'
+    new_cols = []
+    for col in aggregated.columns:
+        if isinstance(col, tuple):
+            if col[1] and col[0] in ['mid_price']:  # Keep aggregation suffix for multi-agg columns
+                new_cols.append('_'.join(col))
+            elif col[1]:  # Single aggregation - drop suffix
+                new_cols.append(col[0])
+            else:  # No aggregation (like time_bin)
+                new_cols.append(col[0])
+        else:
+            new_cols.append(col)
+    aggregated.columns = new_cols
+
+    # Calculate delta_mid_price as BETWEEN-window change (per Cont et al. 2011)
+    # ΔPk = Pk - Pk-1 (change from previous window's end to current window's end)
+    aggregated['mid_price'] = aggregated['mid_price_last']
+    aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
+
+    # Rename timestamp
+    aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
+
+    # Drop helper columns
+    aggregated = aggregated.drop(columns=['mid_price_first', 'mid_price_last'], errors='ignore')
+
+    return aggregated
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 
@@ -214,7 +304,13 @@ def analyze_market(market_name, market_config):
 
     print(f"Loading: {ofi_file}")
     df = pd.read_csv(ofi_file)
-    print(f"Loaded {len(df):,} observations\n")
+    print(f"Loaded {len(df):,} raw observations")
+
+    # Apply 10-minute aggregation per Cont et al. (2011)
+    print("Aggregating to 10-minute intervals...")
+    df_raw_count = len(df)
+    df = aggregate_to_10_seconds(df)
+    print(f"Aggregated to {len(df):,} 10-minute intervals (reduction: {df_raw_count/len(df):.1f}x)\n")
 
     # Data summary
     print("Data Summary:")

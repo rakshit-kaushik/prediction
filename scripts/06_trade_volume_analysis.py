@@ -25,6 +25,75 @@ from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
 
+# ============================================================================
+# 10-SECOND TIME AGGREGATION
+# ============================================================================
+
+def aggregate_to_10_seconds(df):
+    """
+    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Cont et al. (2011) methodology.
+    """
+    if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp_ms'], unit='ms', utc=True)
+    elif 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
+    else:
+        raise ValueError("No timestamp column found")
+
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['time_bin'] = df['timestamp'].dt.floor('10T')
+
+    agg_dict = {
+        'ofi': 'sum',
+        'mid_price': ['first', 'last'],
+        'total_depth': 'mean',
+        'spread': 'mean',
+        'spread_pct': 'mean',
+        'best_bid_price': ['first', 'last'],
+        'best_ask_price': ['first', 'last'],
+        'best_bid_size': 'last',
+        'best_ask_size': 'last',
+        'total_bid_size': 'mean',
+        'total_ask_size': 'mean'
+    }
+
+    for col in ['bid_up', 'bid_down', 'ask_up', 'ask_down']:
+        if col in df.columns:
+            agg_dict[col] = 'max'
+
+    aggregated = df.groupby('time_bin').agg(agg_dict).reset_index()
+    # Flatten multi-level column names
+    # For multi-index columns: ('col', 'agg') -> 'col' if single agg, else 'col_agg'
+    new_cols = []
+    for col in aggregated.columns:
+        if isinstance(col, tuple):
+            if col[1] and col[0] in ['mid_price', 'best_bid_price', 'best_ask_price']:  # Keep aggregation suffix for multi-agg columns
+                new_cols.append('_'.join(col))
+            elif col[1]:  # Single aggregation - drop suffix
+                new_cols.append(col[0])
+            else:  # No aggregation (like time_bin)
+                new_cols.append(col[0])
+        else:
+            new_cols.append(col)
+    aggregated.columns = new_cols
+
+    # Use last prices as the price for the interval
+    aggregated['mid_price'] = aggregated['mid_price_last']
+    aggregated['best_bid_price'] = aggregated['best_bid_price_last']
+    aggregated['best_ask_price'] = aggregated['best_ask_price_last']
+
+    # Calculate BETWEEN-window price changes (per Cont et al. 2011)
+    aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
+    aggregated['delta_best_bid'] = aggregated['best_bid_price'].diff()
+    aggregated['delta_best_ask'] = aggregated['best_ask_price'].diff()
+    aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
+    aggregated = aggregated.drop(columns=['mid_price_first', 'mid_price_last',
+                                          'best_bid_price_first', 'best_bid_price_last',
+                                          'best_ask_price_first', 'best_ask_price_last'], errors='ignore')
+
+    return aggregated
+
 # Set style
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (14, 10)
@@ -214,6 +283,7 @@ def analyze_market(market_name, config):
 
     # Load data
     df = pd.read_csv(config['ofi_file'])
+    df = aggregate_to_10_seconds(df)
     print(f"Loaded {len(df):,} observations\n")
 
     # Calculate TI proxy
