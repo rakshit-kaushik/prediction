@@ -58,6 +58,86 @@ MARKETS = {
 }
 
 # ============================================================================
+# TIME AGGREGATION (Per Cont et al. 2011)
+# ============================================================================
+
+def aggregate_to_10_minutes(df):
+    """
+    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Cont et al. (2011) methodology.
+
+    This matches the aggregation used in all analysis scripts.
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    # Ensure timestamp is datetime
+    if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp_ms'], unit='ms', utc=True)
+    elif 'timestamp' in df.columns:
+        if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
+    else:
+        raise ValueError("No timestamp column found")
+
+    # Sort by timestamp
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    # Create 10-minute bins
+    df['time_bin'] = df['timestamp'].dt.floor('10T')
+
+    # Define aggregation rules
+    agg_dict = {
+        'ofi': 'sum',  # Sum OFI over window
+        'mid_price': ['first', 'last'],
+        'total_depth': 'mean',
+        'spread': 'mean',
+        'spread_pct': 'mean',
+        'best_bid_price': 'last',
+        'best_ask_price': 'last',
+        'best_bid_size': 'last',
+        'best_ask_size': 'last',
+        'total_bid_size': 'mean',
+        'total_ask_size': 'mean'
+    }
+
+    # Add event columns if they exist
+    for col in ['bid_up', 'bid_down', 'ask_up', 'ask_down']:
+        if col in df.columns:
+            agg_dict[col] = 'max'
+
+    # Aggregate
+    aggregated = df.groupby('time_bin').agg(agg_dict).reset_index()
+
+    # Flatten multi-level column names
+    new_cols = []
+    for col in aggregated.columns:
+        if isinstance(col, tuple):
+            if col[1] and col[0] in ['mid_price']:
+                new_cols.append('_'.join(col))
+            elif col[1]:
+                new_cols.append(col[0])
+            else:
+                new_cols.append(col[0])
+        else:
+            new_cols.append(col)
+    aggregated.columns = new_cols
+
+    # Calculate delta_mid_price as BETWEEN-window change (per Cont et al. 2011)
+    # ΔPk = Pk - Pk-1 (change from previous window's end to current window's end)
+    aggregated['mid_price'] = aggregated['mid_price_last']
+    aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
+
+    # Rename timestamp
+    aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
+
+    # Drop temporary columns
+    aggregated = aggregated.drop(columns=['mid_price_first', 'mid_price_last'], errors='ignore')
+
+    return aggregated
+
+
+# ============================================================================
 # DATA LOADING
 # ============================================================================
 
@@ -525,6 +605,12 @@ def main():
         if ofi_df is None or len(ofi_df) == 0:
             st.error("No data found for this market")
             st.stop()
+
+        # Apply 10-minute aggregation (per Cont et al. 2011)
+        with st.spinner("Aggregating to 10-minute intervals..."):
+            raw_count = len(ofi_df)
+            ofi_df = aggregate_to_10_minutes(ofi_df)
+            st.success(f"✓ Aggregated {raw_count:,} snapshots → {len(ofi_df):,} 10-minute intervals")
 
         # Date range sliders
         st.header("Date/Time Filter")
