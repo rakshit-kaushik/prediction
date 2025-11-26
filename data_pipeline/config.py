@@ -53,6 +53,12 @@ RAW_ORDERBOOK_FILE = "data/nyc_mayor_oct15_nov04_raw.json"
 # Where to save processed orderbook data
 PROCESSED_ORDERBOOK_FILE = "data/nyc_mayor_oct15_nov04_processed.csv"
 
+# Where to save raw trade data
+TRADES_RAW_FILE = "data/nyc_mayor_oct15_nov04_trades_raw.json"
+
+# Where to save processed trade data
+TRADES_PROCESSED_FILE = "data/nyc_mayor_oct15_nov04_trades_processed.csv"
+
 # ============================================================================
 # DOWNLOAD SETTINGS
 # ============================================================================

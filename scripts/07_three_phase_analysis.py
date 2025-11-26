@@ -24,14 +24,27 @@ import seaborn as sns
 from scipy import stats
 import statsmodels.api as sm
 
+# Import configuration
+from config_analysis import (
+    TIME_WINDOW,
+    USE_TICK_NORMALIZED,
+    N_PHASES,
+    MIN_OBS_PER_PHASE,
+    get_dependent_variable_name,
+    get_dependent_variable_label,
+    print_config
+)
+
 # ============================================================================
-# 10-MINUTE TIME AGGREGATION
+# TIME AGGREGATION (CONFIGURABLE)
 # ============================================================================
 
-def aggregate_to_10_minutes(df):
+def aggregate_ofi_data(df):
     """
-    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Aggregate raw orderbook snapshots to configurable time intervals following
     Cont et al. (2011) methodology.
+
+    Time window controlled by TIME_WINDOW in config_analysis.py
     """
     if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp_ms'], unit='ms', utc=True)
@@ -41,7 +54,7 @@ def aggregate_to_10_minutes(df):
         raise ValueError("No timestamp column found")
 
     df = df.sort_values('timestamp').reset_index(drop=True)
-    df['time_bin'] = df['timestamp'].dt.floor('10min')
+    df['time_bin'] = df['timestamp'].dt.floor(TIME_WINDOW)
 
     agg_dict = {
         'ofi': 'sum',
@@ -79,6 +92,11 @@ def aggregate_to_10_minutes(df):
 
     aggregated['mid_price'] = aggregated['mid_price_last']
     aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
+
+    # Calculate tick-normalized price change if needed
+    if 'delta_mid_price_ticks' in df.columns:
+        aggregated['delta_mid_price_ticks'] = aggregated['delta_mid_price'] / 0.01  # TICK_SIZE
+
     aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
     aggregated = aggregated.drop(columns=['mid_price_first', 'mid_price_last'], errors='ignore')
 
@@ -108,7 +126,7 @@ def load_nyc_data():
         raise FileNotFoundError(f"NYC OFI data not found: {NYC_OFI_FILE}")
 
     df = pd.read_csv(NYC_OFI_FILE)
-    df = aggregate_to_10_minutes(df)
+    df = aggregate_ofi_data(df)
     df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
 
     return df
@@ -162,14 +180,17 @@ def divide_into_three_phases(df):
 
 def run_phase_regression(phase_df):
     """Run OFI regression for a phase"""
-    # Prepare data
-    df = phase_df.dropna(subset=['ofi', 'delta_mid_price'])
+    # Get dependent variable name from config
+    dep_var = get_dependent_variable_name()
 
-    if len(df) < 30:
+    # Prepare data
+    df = phase_df.dropna(subset=['ofi', dep_var])
+
+    if len(df) < MIN_OBS_PER_PHASE:
         return None
 
     X = df['ofi'].values.reshape(-1, 1)
-    y = df['delta_mid_price'].values
+    y = df[dep_var].values
 
     # Add constant
     X_with_const = sm.add_constant(X)
@@ -189,10 +210,10 @@ def run_phase_regression(phase_df):
         'beta_tstat': results.tvalues[1],
         'beta_pvalue': results.pvalues[1],
         'alpha_pvalue': results.pvalues[0],
-        'correlation': np.corrcoef(df['ofi'], df['delta_mid_price'])[0, 1],
+        'correlation': np.corrcoef(df['ofi'], df[dep_var])[0, 1],
         'avg_price': df['mid_price'].mean(),
         'avg_spread': df['spread'].mean() if 'spread' in df.columns else 0,
-        'price_volatility': df['delta_mid_price'].std(),
+        'price_volatility': df[dep_var].std(),
         'ofi_volatility': df['ofi'].std(),
         'ci_lower': results.conf_int()[1, 0],  # 95% CI lower bound for beta
         'ci_upper': results.conf_int()[1, 1]   # 95% CI upper bound for beta
@@ -336,10 +357,14 @@ def main():
     print("THREE-PHASE BETA ANALYSIS: NYC MAYORAL ELECTION 2025")
     print("="*80 + "\n")
 
+    # Print configuration
+    print_config()
+    print()
+
     # Load data
     print("Loading NYC market data...")
     df = load_nyc_data()
-    print(f"  Total 10-minute intervals: {len(df):,}")
+    print(f"  Total {TIME_WINDOW} intervals: {len(df):,}")
     print(f"  Date range: {df['timestamp'].min().strftime('%Y-%m-%d')} to {df['timestamp'].max().strftime('%Y-%m-%d')}")
     print(f"  Duration: {(df['timestamp'].max() - df['timestamp'].min()).days} days")
 

@@ -21,17 +21,29 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import configuration
+from config_analysis import (
+    TIME_WINDOW,
+    USE_TICK_NORMALIZED,
+    get_dependent_variable_name,
+    get_dependent_variable_label,
+    print_config
+)
+
 # ============================================================================
-# 10-SECOND TIME AGGREGATION
+# TIME AGGREGATION (CONFIGURABLE)
 # ============================================================================
 
-def aggregate_to_10_seconds(df):
+def aggregate_ofi_data(df):
     """
-    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Aggregate raw orderbook snapshots to configurable time intervals following
     Cont et al. (2011) methodology.
 
+    Time window is controlled by TIME_WINDOW in config_analysis.py
+    Default: 10 minutes ('10T'), but can be changed to any valid pandas frequency
+
     Key aggregations:
-    - OFI: Sum over 10-minute window
+    - OFI: Sum over time window
     - Price change: P(end) - P(start) of window
     - Depth/Spread: Average over window
     - Events: Max (occurred if any event in window)
@@ -44,7 +56,7 @@ def aggregate_to_10_seconds(df):
     Returns:
     --------
     pd.DataFrame
-        Aggregated data at 10-minute intervals
+        Aggregated data at configured time intervals
     """
     # Ensure timestamp is datetime
     if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
@@ -57,8 +69,8 @@ def aggregate_to_10_seconds(df):
     # Sort by timestamp
     df = df.sort_values('timestamp').reset_index(drop=True)
 
-    # Create 10-minute bins
-    df['time_bin'] = df['timestamp'].dt.floor('10T')
+    # Create time bins using configurable TIME_WINDOW
+    df['time_bin'] = df['timestamp'].dt.floor(TIME_WINDOW)
 
     # Define aggregation rules
     agg_dict = {
@@ -103,6 +115,12 @@ def aggregate_to_10_seconds(df):
     aggregated['mid_price'] = aggregated['mid_price_last']
     aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
 
+    # Also calculate tick-normalized price change if it exists in raw data
+    if 'delta_mid_price_ticks' in df.columns:
+        # For tick-normalized, we need to aggregate differently
+        # We want the total tick change over the window
+        aggregated['delta_mid_price_ticks'] = aggregated['delta_mid_price'] / 0.01  # TICK_SIZE
+
     # Rename timestamp
     aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
 
@@ -143,9 +161,12 @@ def run_linear_regression(df):
 
     Returns dict with regression statistics
     """
+    # Get dependent variable name from config (delta_mid_price or delta_mid_price_ticks)
+    dep_var = get_dependent_variable_name()
+
     # Remove NaN values
-    valid_mask = ~(df['delta_mid_price'].isna() | df['ofi'].isna())
-    y = df.loc[valid_mask, 'delta_mid_price'].values
+    valid_mask = ~(df[dep_var].isna() | df['ofi'].isna())
+    y = df.loc[valid_mask, dep_var].values
     X = df.loc[valid_mask, 'ofi'].values
 
     n = len(y)
@@ -228,9 +249,12 @@ def run_quadratic_regression(df):
 
     Returns dict with regression statistics
     """
+    # Get dependent variable name from config (delta_mid_price or delta_mid_price_ticks)
+    dep_var = get_dependent_variable_name()
+
     # Remove NaN values
-    valid_mask = ~(df['delta_mid_price'].isna() | df['ofi'].isna())
-    y = df.loc[valid_mask, 'delta_mid_price'].values
+    valid_mask = ~(df[dep_var].isna() | df['ofi'].isna())
+    y = df.loc[valid_mask, dep_var].values
     X1 = df.loc[valid_mask, 'ofi'].values
     X2 = X1 ** 2
 
@@ -306,20 +330,24 @@ def analyze_market(market_name, market_config):
     df = pd.read_csv(ofi_file)
     print(f"Loaded {len(df):,} raw observations")
 
-    # Apply 10-minute aggregation per Cont et al. (2011)
-    print("Aggregating to 10-minute intervals...")
+    # Apply time aggregation per Cont et al. (2011)
+    print(f"Aggregating to {TIME_WINDOW} intervals...")
     df_raw_count = len(df)
-    df = aggregate_to_10_seconds(df)
-    print(f"Aggregated to {len(df):,} 10-minute intervals (reduction: {df_raw_count/len(df):.1f}x)\n")
+    df = aggregate_ofi_data(df)
+    print(f"Aggregated to {len(df):,} {TIME_WINDOW} intervals (reduction: {df_raw_count/len(df):.1f}x)\n")
+
+    # Get dependent variable name from config
+    dep_var = get_dependent_variable_name()
+    dep_var_label = get_dependent_variable_label()
 
     # Data summary
     print("Data Summary:")
     print(f"  OFI range: {df['ofi'].min():.2f} to {df['ofi'].max():.2f}")
     print(f"  OFI mean: {df['ofi'].mean():.2f}, std: {df['ofi'].std():.2f}")
-    print(f"  ΔP range: {df['delta_mid_price'].min():.6f} to {df['delta_mid_price'].max():.6f}")
-    print(f"  ΔP mean: {df['delta_mid_price'].mean():.6f}, std: {df['delta_mid_price'].std():.6f}")
+    print(f"  {dep_var_label} range: {df[dep_var].min():.6f} to {df[dep_var].max():.6f}")
+    print(f"  {dep_var_label} mean: {df[dep_var].mean():.6f}, std: {df[dep_var].std():.6f}")
     print(f"  Non-zero OFI: {(df['ofi'] != 0).sum():,} ({100*(df['ofi'] != 0).sum()/len(df):.1f}%)")
-    print(f"  Non-zero ΔP: {(df['delta_mid_price'] != 0).sum():,} ({100*(df['delta_mid_price'] != 0).sum()/len(df):.1f}%)\n")
+    print(f"  Non-zero {dep_var_label}: {(df[dep_var] != 0).sum():,} ({100*(df[dep_var] != 0).sum()/len(df):.1f}%)\n")
 
     # Run regressions
     print("Running Linear Regression: ΔP = α + β × OFI + ε")
@@ -421,6 +449,10 @@ def main():
     print("\nReplicating Section 3.2: Empirical Findings")
     print("Linear model: ΔP = α + β × OFI + ε")
     print("Quadratic model: ΔP = α + β₁×OFI + β₂×OFI² + ε\n")
+
+    # Print configuration
+    print_config()
+    print()
 
     # Analyze all markets
     all_results = []
