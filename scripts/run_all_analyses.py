@@ -51,6 +51,11 @@ SCRIPTS = [
         "name": "Trade Imbalance & Volume",
         "file": "scripts/06_trade_volume_analysis.py",
         "description": "OFI vs TI comparison and volume-price analysis"
+    },
+    {
+        "name": "Three-Phase Beta Analysis",
+        "file": "scripts/07_three_phase_analysis.py",
+        "description": "NYC market beta evolution across 3 phases"
     }
 ]
 
@@ -168,6 +173,7 @@ def main():
     print("  - table_3_depth_analysis.csv")
     print("  - table_4_variance_decomposition.csv")
     print("  - table_5_ofi_ti_comparison.csv")
+    print("  - table_7_three_phase_analysis.csv")
 
     print("\nFigures (results/figures/):")
     print("  - figure_2_*_ofi_vs_price.{png,pdf} (scatter plots)")
@@ -176,6 +182,7 @@ def main():
     print("  - figure_4_depth_analysis.{png,pdf}")
     print("  - figure_5_event_analysis.{png,pdf}")
     print("  - figure_6_ofi_ti_comparison.{png,pdf}")
+    print("  - figure_7_three_phase_analysis.{png,pdf}")
 
     print("\nAnalysis Files (results/analysis/):")
     print("  - *_regression_detailed.csv")

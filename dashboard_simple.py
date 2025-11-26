@@ -686,7 +686,7 @@ def main():
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "Price & Depth",
         "OFI Analysis",
-        "Intraday Patterns",
+        "3-Phase Analysis",
         "Summary Stats",
         "Research Results",
         "Depth & Events",
@@ -724,9 +724,68 @@ def main():
         st.plotly_chart(fig_ofi_dist, use_container_width=True)
 
     with tab3:
-        st.subheader("Hourly Patterns")
-        fig_intraday = plot_intraday_patterns(filtered_ofi)
-        st.plotly_chart(fig_intraday, use_container_width=True)
+        st.subheader("Three-Phase Beta Analysis (NYC Market)")
+
+        # Check if this is NYC market
+        if 'NYC' in selected_market or 'Mamdani' in selected_market:
+            # Try to load the 3-phase analysis results
+            three_phase_file = TABLES_DIR / "table_7_three_phase_analysis.csv"
+            three_phase_figure = FIGURES_DIR / "figure_7_three_phase_analysis.png"
+
+            if three_phase_file.exists():
+                phase_df = pd.read_csv(three_phase_file)
+
+                st.markdown("""
+                This analysis divides the NYC mayoral election market timeline into 3 equal phases
+                and examines how the OFI-price relationship (β coefficient) evolves:
+                - **Phase 1: Early** - First 1/3 of market lifetime
+                - **Phase 2: Middle** - Middle 1/3
+                - **Phase 3: Near Expiry** - Final 1/3 before resolution
+                """)
+
+                # Display summary table
+                st.markdown("### Phase Regression Results")
+                display_cols = ['phase', 'beta', 'beta_pvalue', 'r_squared', 'n_obs']
+                display_df = phase_df[display_cols].copy()
+                display_df['beta'] = display_df['beta'].apply(lambda x: f"{x:.2e}")
+                display_df['beta_pvalue'] = display_df['beta_pvalue'].apply(lambda x: f"{x:.4f}")
+                display_df['r_squared'] = display_df['r_squared'].apply(lambda x: f"{x:.4f}")
+                display_df.columns = ['Phase', 'β Coefficient', 'p-value', 'R²', 'Observations']
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+                # Display figure if it exists
+                if three_phase_figure.exists():
+                    st.markdown("### Visualization")
+                    three_phase_img = load_figure_image("figure_7_three_phase_analysis.png")
+                    if three_phase_img:
+                        st.image(three_phase_img, use_container_width=True)
+
+                # Key findings
+                beta_change = ((phase_df.iloc[2]['beta'] - phase_df.iloc[0]['beta']) /
+                               abs(phase_df.iloc[0]['beta']) * 100)
+
+                st.markdown("### Key Findings")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Phase 1 β", f"{phase_df.iloc[0]['beta']:.2e}",
+                             help="Early period price impact")
+                with col2:
+                    st.metric("Phase 2 β", f"{phase_df.iloc[1]['beta']:.2e}",
+                             help="Middle period price impact")
+                with col3:
+                    st.metric("Phase 3 β", f"{phase_df.iloc[2]['beta']:.2e}",
+                             delta=f"{beta_change:+.1f}%",
+                             help="Near-expiry price impact and % change from Phase 1")
+
+                st.info(f"""
+                **Interpretation:** Beta decreased by {abs(beta_change):.1f}% from early to near expiry,
+                suggesting that order flow has {('stronger' if beta_change > 0 else 'weaker')} price impact
+                as the market approaches resolution.
+                """)
+            else:
+                st.warning("3-phase analysis results not found. Run: `python scripts/07_three_phase_analysis.py`")
+        else:
+            st.info("Three-phase analysis is only available for the NYC Mayoral Election market.")
 
     with tab4:
         st.subheader("Summary Statistics")
