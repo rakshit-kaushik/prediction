@@ -15,20 +15,18 @@ Dashboard opens at **http://localhost:8501**
 - Explore pre-downloaded OFI data for prediction markets
 - Interactive charts showing price, OFI, and order book depth
 - Filter by date/time ranges
-- View regression statistics and patterns
+- Real-time 10-minute data aggregation (per Cont et al. 2011 methodology)
 
 ## Dashboard Features
 
 ### Tabs:
-1. **Price & Depth** - Price evolution, spreads, order book depth
-2. **OFI Analysis** - OFI vs price change scatter plots with regression
-3. **3-Phase Analysis** - NYC market beta evolution across trading phases
-4. **Summary Stats** - Comprehensive statistics and raw data
+1. **📈 Price & Depth** - Price evolution, bid-ask spreads, order book depth
+2. **📊 OFI Analysis** - OFI vs price change scatter plots with regression statistics
 
 ### Controls (Sidebar):
 - Market selection dropdown
-- Date/time filters
-- Data info and statistics
+- Date/time filters (UTC)
+- Data aggregation info
 
 ## Input Methods (For Adding New Markets)
 

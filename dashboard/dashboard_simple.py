@@ -27,17 +27,12 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
-from PIL import Image
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
 DATA_DIR = Path("data")
-RESULTS_DIR = Path("results")
-TABLES_DIR = RESULTS_DIR / "tables"
-FIGURES_DIR = RESULTS_DIR / "figures"
-ANALYSIS_DIR = RESULTS_DIR / "analysis"
 
 # Pre-configured markets
 MARKETS = {
@@ -203,39 +198,6 @@ def filter_by_date(df, start_date, end_date):
 
     mask = (df['timestamp'] >= start_date_utc) & (df['timestamp'] <= end_date_utc)
     return df[mask].copy()
-
-
-# ============================================================================
-# RESEARCH DATA LOADING (NEW!)
-# ============================================================================
-
-@st.cache_data
-def load_research_tables():
-    """Load all research tables"""
-    tables = {}
-    table_files = {
-        'regression': 'table_2_regression_statistics.csv',
-        'depth': 'table_3_depth_analysis.csv',
-        'variance': 'table_4_variance_decomposition.csv',
-        'ti_comparison': 'table_5_ofi_ti_comparison.csv'
-    }
-
-    for key, filename in table_files.items():
-        file_path = TABLES_DIR / filename
-        if file_path.exists():
-            tables[key] = pd.read_csv(file_path)
-        else:
-            tables[key] = None
-
-    return tables
-
-@st.cache_data
-def load_figure_image(filename):
-    """Load a figure image"""
-    file_path = FIGURES_DIR / filename
-    if file_path.exists():
-        return Image.open(file_path)
-    return None
 
 
 # ============================================================================
@@ -466,120 +428,18 @@ def plot_ofi_distribution(df):
     return fig
 
 
-def plot_intraday_patterns(df):
-    """Plot intraday OFI patterns by hour"""
-    df_copy = df.copy()
-    df_copy['hour'] = df_copy['timestamp'].dt.hour
-
-    hourly_stats = df_copy.groupby('hour').agg({
-        'ofi': ['mean', 'std', 'count'],
-        'delta_mid_price': ['mean', 'std']
-    }).reset_index()
-
-    hourly_stats.columns = ['hour', 'ofi_mean', 'ofi_std', 'ofi_count',
-                            'price_change_mean', 'price_change_std']
-
-    fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=('Average OFI by Hour', 'Average Price Change by Hour'),
-        vertical_spacing=0.15
-    )
-
-    # OFI by hour
-    fig.add_trace(
-        go.Bar(
-            x=hourly_stats['hour'],
-            y=hourly_stats['ofi_mean'],
-            name='Avg OFI',
-            marker=dict(color='#2E86AB'),
-            error_y=dict(type='data', array=hourly_stats['ofi_std']),
-            hovertemplate='<b>Hour:</b> %{x}<br><b>Avg OFI:</b> %{y:.2f}<extra></extra>'
-        ),
-        row=1, col=1
-    )
-
-    # Price change by hour
-    fig.add_trace(
-        go.Bar(
-            x=hourly_stats['hour'],
-            y=hourly_stats['price_change_mean'],
-            name='Avg ΔP',
-            marker=dict(color='#06A77D'),
-            error_y=dict(type='data', array=hourly_stats['price_change_std']),
-            hovertemplate='<b>Hour:</b> %{x}<br><b>Avg ΔP:</b> %{y:.6f}<extra></extra>'
-        ),
-        row=2, col=1
-    )
-
-    fig.update_xaxes(title_text="Hour of Day (UTC)", row=2, col=1)
-    fig.update_yaxes(title_text="OFI", row=1, col=1)
-    fig.update_yaxes(title_text="ΔP", row=2, col=1)
-
-    fig.update_layout(
-        title="Intraday Patterns",
-        height=500,
-        showlegend=False
-    )
-
-    return fig
-
-
-# ============================================================================
-# SUMMARY STATISTICS
-# ============================================================================
-
-def calculate_summary_stats(ofi_df, orderbook_df):
-    """Calculate summary statistics for selected period"""
-    stats = {}
-
-    if ofi_df is not None and len(ofi_df) > 0:
-        stats['Total Snapshots'] = len(ofi_df)
-        stats['Date Range'] = f"{ofi_df['timestamp'].min().strftime('%Y-%m-%d')} to {ofi_df['timestamp'].max().strftime('%Y-%m-%d')}"
-        stats['Duration (days)'] = (ofi_df['timestamp'].max() - ofi_df['timestamp'].min()).days
-
-        # Price stats
-        stats['Price Range'] = f"${ofi_df['mid_price'].min():.4f} - ${ofi_df['mid_price'].max():.4f}"
-        stats['Avg Price'] = f"${ofi_df['mid_price'].mean():.4f}"
-        stats['Price Std Dev'] = f"${ofi_df['mid_price'].std():.4f}"
-
-        # OFI stats
-        ofi_nonzero = ofi_df[ofi_df['ofi'] != 0]
-        stats['Non-zero OFI Events'] = f"{len(ofi_nonzero):,} ({len(ofi_nonzero)/len(ofi_df)*100:.1f}%)"
-        stats['OFI Range'] = f"{ofi_df['ofi'].min():,.2f} to {ofi_df['ofi'].max():,.2f}"
-        stats['Mean OFI'] = f"{ofi_df['ofi'].mean():.2f}"
-
-        # Spread stats
-        stats['Avg Spread'] = f"{ofi_df['spread'].mean():.4f} ({ofi_df['spread_pct'].mean():.2f}%)"
-        stats['Spread Range'] = f"{ofi_df['spread_pct'].min():.2f}% - {ofi_df['spread_pct'].max():.2f}%"
-
-        # Depth stats
-        stats['Avg Total Depth'] = f"{ofi_df['total_depth'].mean():,.0f}"
-        stats['Avg Bid Depth'] = f"{ofi_df['total_bid_size'].mean():,.0f}"
-        stats['Avg Ask Depth'] = f"{ofi_df['total_ask_size'].mean():,.0f}"
-
-        # Correlation
-        if len(ofi_nonzero) > 2:
-            from scipy import stats as sp_stats
-            correlation = ofi_nonzero['ofi'].corr(ofi_nonzero['delta_mid_price'])
-            result = sp_stats.linregress(ofi_nonzero['ofi'], ofi_nonzero['delta_mid_price'])
-            p_value = result.pvalue
-            stats['OFI-Price Correlation'] = f"{correlation:.4f} (p={p_value:.2e})"
-
-    return stats
-
-
 # ============================================================================
 # MAIN APP
 # ============================================================================
 
 def main():
     st.set_page_config(
-        page_title="OFI Analysis Dashboard - Cont et al. (2011) Replication",
+        page_title="OFI Analysis Dashboard",
         layout="wide"
     )
 
     st.title("OFI Analysis Dashboard")
-    st.markdown("**Data exploration + Complete Cont et al. (2011) replication results**")
+    st.markdown("**Interactive data exploration for Polymarket order flow analysis**")
 
     # Sidebar - Market Selection
     with st.sidebar:
@@ -683,15 +543,9 @@ def main():
         st.stop()
 
     # Main content area - tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "Price & Depth",
-        "OFI Analysis",
-        "3-Phase Analysis",
-        "Summary Stats",
-        "Research Results",
-        "Depth & Events",
-        "Figures Gallery",
-        "Time to Expiry"
+    tab1, tab2 = st.tabs([
+        "📈 Price & Depth",
+        "📊 OFI Analysis"
     ])
 
     with tab1:
@@ -722,334 +576,6 @@ def main():
         st.subheader("OFI Distribution")
         fig_ofi_dist = plot_ofi_distribution(filtered_ofi)
         st.plotly_chart(fig_ofi_dist, use_container_width=True)
-
-    with tab3:
-        st.subheader("Three-Phase Beta Analysis (NYC Market)")
-
-        # Check if this is NYC market
-        if 'NYC' in selected_market or 'Mamdani' in selected_market:
-            # Try to load the 3-phase analysis results
-            three_phase_file = TABLES_DIR / "table_7_three_phase_analysis.csv"
-            three_phase_figure = FIGURES_DIR / "figure_7_three_phase_analysis.png"
-
-            if three_phase_file.exists():
-                phase_df = pd.read_csv(three_phase_file)
-
-                st.markdown("""
-                This analysis divides the NYC mayoral election market timeline into 3 equal phases
-                and examines how the OFI-price relationship (β coefficient) evolves:
-                - **Phase 1: Early** - First 1/3 of market lifetime
-                - **Phase 2: Middle** - Middle 1/3
-                - **Phase 3: Near Expiry** - Final 1/3 before resolution
-                """)
-
-                # Display summary table
-                st.markdown("### Phase Regression Results")
-                display_cols = ['phase', 'beta', 'beta_pvalue', 'r_squared', 'n_obs']
-                display_df = phase_df[display_cols].copy()
-                display_df['beta'] = display_df['beta'].apply(lambda x: f"{x:.2e}")
-                display_df['beta_pvalue'] = display_df['beta_pvalue'].apply(lambda x: f"{x:.4f}")
-                display_df['r_squared'] = display_df['r_squared'].apply(lambda x: f"{x:.4f}")
-                display_df.columns = ['Phase', 'β Coefficient', 'p-value', 'R²', 'Observations']
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-                # Display figure if it exists
-                if three_phase_figure.exists():
-                    st.markdown("### Visualization")
-                    three_phase_img = load_figure_image("figure_7_three_phase_analysis.png")
-                    if three_phase_img:
-                        st.image(three_phase_img, use_container_width=True)
-
-                # Key findings
-                beta_change = ((phase_df.iloc[2]['beta'] - phase_df.iloc[0]['beta']) /
-                               abs(phase_df.iloc[0]['beta']) * 100)
-
-                st.markdown("### Key Findings")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Phase 1 β", f"{phase_df.iloc[0]['beta']:.2e}",
-                             help="Early period price impact")
-                with col2:
-                    st.metric("Phase 2 β", f"{phase_df.iloc[1]['beta']:.2e}",
-                             help="Middle period price impact")
-                with col3:
-                    st.metric("Phase 3 β", f"{phase_df.iloc[2]['beta']:.2e}",
-                             delta=f"{beta_change:+.1f}%",
-                             help="Near-expiry price impact and % change from Phase 1")
-
-                st.info(f"""
-                **Interpretation:** Beta decreased by {abs(beta_change):.1f}% from early to near expiry,
-                suggesting that order flow has {('stronger' if beta_change > 0 else 'weaker')} price impact
-                as the market approaches resolution.
-                """)
-            else:
-                st.warning("3-phase analysis results not found. Run: `python scripts/07_three_phase_analysis.py`")
-        else:
-            st.info("Three-phase analysis is only available for the NYC Mayoral Election market.")
-
-    with tab4:
-        st.subheader("Summary Statistics")
-
-        stats = calculate_summary_stats(filtered_ofi, filtered_orderbook)
-
-        # Display in columns
-        cols = st.columns(3)
-
-        stat_items = list(stats.items())
-        for idx, (key, value) in enumerate(stat_items):
-            with cols[idx % 3]:
-                st.metric(key, value)
-
-        # Raw data preview
-        with st.expander("View Raw Data"):
-            st.dataframe(filtered_ofi.head(100), use_container_width=True)
-
-    # ========================================================================
-    # NEW RESEARCH RESULTS TAB
-    # ========================================================================
-
-    with tab5:
-        st.subheader("Research Results - Cont et al. (2011) Replication")
-
-        st.info("""
-        **Complete replication of "The Price Impact of Order Book Events"**
-
-        This tab shows all results from our paper replication analysis.
-        Run `python scripts/run_all_analyses.py` to generate all results.
-        """)
-
-        # Load all research tables
-        research_tables = load_research_tables()
-
-        # Display tables in expanders
-        with st.expander("Table 2: Regression Analysis", expanded=True):
-            if research_tables['regression'] is not None:
-                st.markdown("**Linear Model:** ΔP = α + β × OFI + ε")
-                st.dataframe(research_tables['regression'], use_container_width=True, hide_index=True)
-
-                col1, col2, col3 = st.columns(3)
-                df = research_tables['regression']
-                with col1:
-                    st.metric("Avg R²", f"{df['R_squared'].mean():.4f}")
-                with col2:
-                    st.metric("Avg Correlation", f"{df['Correlation'].mean():.4f}")
-                with col3:
-                    sig_count = (df['p_Beta'] < 0.05).sum()
-                    st.metric("Significant Markets", f"{sig_count}/{len(df)}")
-            else:
-                st.warning("Run: `python scripts/01_regression_analysis.py`")
-
-        with st.expander("Table 5: OFI vs Trade Imbalance"):
-            if research_tables['ti_comparison'] is not None:
-                st.markdown("**Horse-Race Regressions:** Which predicts price better?")
-                st.dataframe(research_tables['ti_comparison'], use_container_width=True, hide_index=True)
-
-                df = research_tables['ti_comparison']
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Avg OFI R²", f"{df['R2_OFI'].mean():.4f}")
-                with col2:
-                    st.metric("Avg TI R²", f"{df['R2_TI'].mean():.4f}")
-                with col3:
-                    improvement = df['R2_Improvement'].mean() * 100
-                    st.metric("TI Adds", f"{improvement:.2f}%")
-
-                st.success("**Result:** OFI dominates trade imbalance (consistent with paper)")
-            else:
-                st.warning("Run: `python scripts/06_trade_volume_analysis.py`")
-
-        # Show scatter plot
-        st.subheader("OFI vs Price Change")
-        scatter_img = load_figure_image("figure_2_combined_comparison.png")
-        if scatter_img:
-            st.image(scatter_img, caption="Figure 2: OFI vs Price Change Scatter Plots", use_column_width=True)
-
-    # ========================================================================
-    # DEPTH & EVENTS TAB
-    # ========================================================================
-
-    with tab6:
-        st.subheader("Depth Analysis & Event Patterns")
-
-        research_tables = load_research_tables()
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("### Table 3: Depth Analysis")
-            if research_tables['depth'] is not None:
-                st.markdown("**Power Law:** β = a / AD^λ")
-                st.dataframe(research_tables['depth'], use_container_width=True, hide_index=True)
-
-                df = research_tables['depth']
-                m1, m2 = st.columns(2)
-                with m1:
-                    st.metric("Avg λ", f"{df['Power_Law_lambda'].mean():.3f}", help="Paper: ~1.0")
-                with m2:
-                    close_to_one = (np.abs(df['Power_Law_lambda'] - 1.0) < 0.3).sum()
-                    st.metric("Close to Paper", f"{close_to_one}/{len(df)}")
-
-                st.info("Prediction markets show weaker depth relationship than equities")
-            else:
-                st.warning("Run: `python scripts/04_depth_analysis.py`")
-
-        with col2:
-            st.markdown("### Table 4: Variance Decomposition")
-            if research_tables['variance'] is not None:
-                st.markdown("**How much price variance is explained by OFI?**")
-                st.dataframe(research_tables['variance'], use_container_width=True, hide_index=True)
-
-                df = research_tables['variance']
-                avg_explained = df['Pct_Explained'].mean()
-                st.metric("Avg Variance Explained", f"{avg_explained:.1f}%")
-
-                st.warning(f"""
-                **Key Finding:** OFI explains only **{avg_explained:.1f}%** of price variance
-                (vs **65%** in equity markets).
-
-                → Prediction markets are more **news-driven** than orderbook-driven.
-                """)
-            else:
-                st.warning("Run: `python scripts/05_event_analysis.py`")
-
-        # Show depth figure
-        st.subheader("Depth Analysis Visualization")
-        depth_img = load_figure_image("figure_4_depth_analysis.png")
-        if depth_img:
-            st.image(depth_img, caption="Figure 4: β vs Average Depth (Power Law)", use_column_width=True)
-
-        # Show event analysis
-        st.subheader("Event Pattern Analysis")
-        event_img = load_figure_image("figure_5_event_analysis.png")
-        if event_img:
-            st.image(event_img, caption="Figure 5: Orderbook Event Patterns", use_column_width=True)
-
-    # ========================================================================
-    # FIGURES GALLERY TAB
-    # ========================================================================
-
-    with tab7:
-        st.subheader("Publication Figures Gallery")
-
-        st.markdown("""
-        All publication-quality figures (300 DPI PNG + PDF vectors).
-        Download from `results/figures/` directory.
-        """)
-
-        figures = [
-            ("figure_2_combined_comparison.png", "Figure 2: OFI vs Price Change"),
-            ("figure_3_Fed_residual_diagnostics.png", "Figure 3a: Fed Residual Diagnostics"),
-            ("figure_3_NYC_residual_diagnostics.png", "Figure 3b: NYC Residual Diagnostics"),
-            ("figure_4_depth_analysis.png", "Figure 4: Depth Analysis"),
-            ("figure_5_event_analysis.png", "Figure 5: Event Patterns"),
-            ("figure_6_ofi_ti_comparison.png", "Figure 6: OFI vs TI Comparison"),
-        ]
-
-        for filename, caption in figures:
-            with st.expander(caption, expanded=False):
-                img = load_figure_image(filename)
-                if img:
-                    st.image(img, caption=caption, use_column_width=True)
-                    st.caption(f"File: `results/figures/{filename}`")
-                else:
-                    st.warning(f"Figure not found. Run: `python scripts/run_all_analyses.py`")
-
-    # ========================================================================
-    # TIME TO EXPIRY ANALYSIS TAB
-    # ========================================================================
-
-    with tab8:
-        st.subheader("Time-to-Expiry Analysis: NYC Mayoral Election")
-
-        st.info("""
-        **How does the OFI-price relationship change as the market approaches expiry?**
-
-        This analysis examines the last 2-3 hours before the NYC Mayoral Election results
-        compared to earlier periods. Only closed markets are analyzed.
-        """)
-
-        # Load time-to-expiry analysis
-        tte_file = ANALYSIS_DIR / "NYC_time_to_expiry_analysis.csv"
-        if tte_file.exists():
-            tte_df = pd.read_csv(tte_file)
-
-            # Display summary metrics
-            st.markdown("### Key Findings")
-
-            last_2h = tte_df[tte_df['segment'] == 'Last 2 hours'].iloc[0]
-            rest = tte_df[tte_df['segment'] != 'Last 2 hours']
-
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                beta_change = (last_2h['beta'] / rest['beta'].mean() - 1) * 100
-                st.metric(
-                    "Beta Change (Last 2h)",
-                    f"+{beta_change:.1f}%",
-                    delta="vs earlier periods",
-                    help="Price impact coefficient increased by this much in final 2 hours"
-                )
-
-            with col2:
-                st.metric(
-                    "R² (Last 2h)",
-                    f"{last_2h['r_squared']:.3f}",
-                    delta=f"+{(last_2h['r_squared'] - rest['r_squared'].mean()):.3f}",
-                    help="OFI explains 25.6% of price variance in final 2 hours vs 9.6% earlier"
-                )
-
-            with col3:
-                depth_change = (last_2h['avg_depth'] / rest['avg_depth'].mean() - 1) * 100
-                st.metric(
-                    "Liquidity Change",
-                    f"{depth_change:.1f}%",
-                    delta="depth decrease",
-                    delta_color="inverse",
-                    help="Market depth decreased 56% in final 2 hours"
-                )
-
-            with col4:
-                st.metric(
-                    "Observations",
-                    f"{last_2h['n_obs']:.0f}",
-                    help="Number of snapshots in final 2 hours"
-                )
-
-            # Display full table
-            st.markdown("### Beta Evolution by Time Period")
-
-            # Format the dataframe for display
-            display_df = tte_df[['segment', 'n_obs', 'beta', 'r_squared', 'correlation', 'avg_depth']].copy()
-            display_df.columns = ['Period', 'N Obs', 'Beta', 'R²', 'Correlation', 'Avg Depth']
-
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-            # Show interpretation
-            st.markdown("### Interpretation")
-            st.markdown(f"""
-            **Price Impact Intensifies Near Expiry:**
-            - Beta increases by **{beta_change:.0f}%** in final 2 hours
-            - R² increases from {rest['r_squared'].mean():.1%} to {last_2h['r_squared']:.1%}
-            - Despite **{abs(depth_change):.0f}%** drop in liquidity, OFI becomes MORE predictive
-
-            **Implications:**
-            1. **Informed Trading**: Last-minute traders likely have better information
-            2. **Market Efficiency**: Order flow information matters more near resolution
-            3. **Liquidity Withdrawal**: Market makers pull out, increasing price impact per unit OFI
-            4. **Trading Strategy**: OFI signals are strongest in final hours before market close
-            """)
-
-            # Show visualization
-            st.markdown("### Visualization")
-            fig_img = load_figure_image("figure_7_NYC_time_to_expiry.png")
-            if fig_img:
-                st.image(fig_img, caption="Figure 7: OFI Price Impact Near Market Expiry", use_column_width=True)
-                st.caption("File: `results/figures/figure_7_NYC_time_to_expiry.png`")
-            else:
-                st.warning("Figure not found. Run: `python scripts/07_time_to_expiry_analysis.py`")
-
-        else:
-            st.warning("Time-to-expiry analysis not found. Run: `python scripts/07_time_to_expiry_analysis.py`")
 
 
 if __name__ == "__main__":
