@@ -27,12 +27,23 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import sys
+
+# Add parent directory to path to import config
+sys.path.append(str(Path(__file__).parent.parent))
+from scripts.config_analysis import (
+    TIME_WINDOW,
+    TICK_SIZE,
+    USE_TICK_NORMALIZED,
+    get_dependent_variable_name,
+    get_dependent_variable_label
+)
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-DATA_DIR = Path("data")
+DATA_DIR = Path(__file__).parent.parent / "data"
 
 # Pre-configured markets
 MARKETS = {
@@ -56,12 +67,13 @@ MARKETS = {
 # TIME AGGREGATION (Per Cont et al. 2011)
 # ============================================================================
 
-def aggregate_to_10_minutes(df):
+def aggregate_ofi_data(df):
     """
-    Aggregate raw orderbook snapshots to 10-minute intervals following
+    Aggregate raw orderbook snapshots using configurable time window following
     Cont et al. (2011) methodology.
 
     This matches the aggregation used in all analysis scripts.
+    Uses TIME_WINDOW from config_analysis.py (e.g., '10T' for 10 minutes).
     """
     if df is None or len(df) == 0:
         return df
@@ -78,8 +90,8 @@ def aggregate_to_10_minutes(df):
     # Sort by timestamp
     df = df.sort_values('timestamp').reset_index(drop=True)
 
-    # Create 10-minute bins
-    df['time_bin'] = df['timestamp'].dt.floor('10T')
+    # Create time bins using configurable TIME_WINDOW
+    df['time_bin'] = df['timestamp'].dt.floor(TIME_WINDOW)
 
     # Define aggregation rules
     agg_dict = {
@@ -122,6 +134,9 @@ def aggregate_to_10_minutes(df):
     # ΔPk = Pk - Pk-1 (change from previous window's end to current window's end)
     aggregated['mid_price'] = aggregated['mid_price_last']
     aggregated['delta_mid_price'] = aggregated['mid_price'].diff()
+
+    # Calculate tick-normalized price change
+    aggregated['delta_mid_price_ticks'] = aggregated['delta_mid_price'] / TICK_SIZE
 
     # Rename timestamp
     aggregated = aggregated.rename(columns={'time_bin': 'timestamp'})
@@ -334,9 +349,13 @@ def plot_depth_evolution(df):
 
 
 def plot_ofi_analysis(df):
-    """Plot OFI vs price change"""
+    """Plot OFI vs price change using configurable dependent variable"""
+    # Get dependent variable from config
+    dep_var = get_dependent_variable_name()
+    dep_var_label = get_dependent_variable_label()
+
     # Filter non-zero OFI
-    df_nonzero = df[(df['ofi'] != 0) | (df['delta_mid_price'] != 0)].copy()
+    df_nonzero = df[(df['ofi'] != 0) | (df[dep_var] != 0)].copy()
 
     if len(df_nonzero) == 0:
         return None
@@ -346,24 +365,24 @@ def plot_ofi_analysis(df):
     # Scatter plot
     fig.add_trace(go.Scatter(
         x=df_nonzero['ofi'],
-        y=df_nonzero['delta_mid_price'],
+        y=df_nonzero[dep_var],
         mode='markers',
         marker=dict(
             size=5,
-            color=df_nonzero['delta_mid_price'],
+            color=df_nonzero[dep_var],
             colorscale='RdYlGn',
             showscale=True,
-            colorbar=dict(title="ΔP"),
+            colorbar=dict(title=dep_var_label),
             opacity=0.6
         ),
-        hovertemplate='<b>OFI:</b> %{x:.2f}<br><b>ΔP:</b> %{y:.6f}<extra></extra>'
+        hovertemplate=f'<b>OFI:</b> %{{x:.2f}}<br><b>{dep_var_label}:</b> %{{y:.6f}}<extra></extra>'
     ))
 
     # Add regression line
     from scipy import stats
     if len(df_nonzero) > 2:
         slope, intercept, r_value, p_value, std_err = stats.linregress(
-            df_nonzero['ofi'], df_nonzero['delta_mid_price']
+            df_nonzero['ofi'], df_nonzero[dep_var]
         )
 
         x_range = np.array([df_nonzero['ofi'].min(), df_nonzero['ofi'].max()])
@@ -382,7 +401,7 @@ def plot_ofi_analysis(df):
         fig.add_annotation(
             x=0.05, y=0.95,
             xref='paper', yref='paper',
-            text=f'R² = {r_value**2:.4f}<br>p-value = {p_value:.2e}',
+            text=f'R² = {r_value**2:.4f}<br>β = {slope:.2e}<br>p-value = {p_value:.2e}',
             showarrow=False,
             bgcolor='white',
             bordercolor='black',
@@ -392,7 +411,7 @@ def plot_ofi_analysis(df):
     fig.update_layout(
         title="Order Flow Imbalance vs Price Change",
         xaxis_title="OFI",
-        yaxis_title="ΔP (Price Change)",
+        yaxis_title=dep_var_label,
         hovermode='closest',
         height=500
     )
@@ -441,6 +460,11 @@ def main():
     st.title("OFI Analysis Dashboard")
     st.markdown("**Interactive data exploration for Polymarket order flow analysis**")
 
+    # Display configuration
+    time_window_str = TIME_WINDOW.replace('T', ' min').replace('S', ' sec')
+    dep_var_label = get_dependent_variable_label()
+    st.caption(f"Configuration: Time Window = {time_window_str}, Price Units = {dep_var_label}")
+
     # Sidebar - Market Selection
     with st.sidebar:
         st.header("Market Selection")
@@ -466,11 +490,13 @@ def main():
             st.error("No data found for this market")
             st.stop()
 
-        # Apply 10-minute aggregation (per Cont et al. 2011)
-        with st.spinner("Aggregating to 10-minute intervals..."):
+        # Apply time aggregation (per Cont et al. 2011)
+        # Display time window in human-readable format
+        time_window_str = TIME_WINDOW.replace('T', ' min').replace('S', ' sec')
+        with st.spinner(f"Aggregating to {time_window_str} intervals..."):
             raw_count = len(ofi_df)
-            ofi_df = aggregate_to_10_minutes(ofi_df)
-            st.success(f"✓ Aggregated {raw_count:,} snapshots → {len(ofi_df):,} 10-minute intervals")
+            ofi_df = aggregate_ofi_data(ofi_df)
+            st.success(f"✓ Aggregated {raw_count:,} snapshots → {len(ofi_df):,} {time_window_str} intervals")
 
         # Date range sliders
         st.header("Date/Time Filter")
