@@ -125,6 +125,45 @@ def get_outlier_methods(df):
         'Pctl (5%-95%)': filter_outliers_percentile_aggressive(df, 'ofi'),
     }
 
+
+def split_into_phases(df, split_method='snapshot'):
+    """
+    Split dataframe into 3 phases based on chosen method.
+
+    Args:
+        df: DataFrame with timestamp column
+        split_method: 'snapshot' (by observation count) or 'date' (by calendar time)
+
+    Returns:
+        dict of phase_name -> DataFrame
+    """
+    if split_method == 'date':
+        # Split by calendar time
+        min_time = df['timestamp'].min()
+        max_time = df['timestamp'].max()
+        total_duration = max_time - min_time
+        one_third = total_duration / 3
+
+        cutoff1 = min_time + one_third
+        cutoff2 = min_time + 2 * one_third
+
+        phases = {
+            'P1 (Early)': df[df['timestamp'] < cutoff1],
+            'P2 (Middle)': df[(df['timestamp'] >= cutoff1) & (df['timestamp'] < cutoff2)],
+            'P3 (Near Expiry)': df[df['timestamp'] >= cutoff2]
+        }
+    else:
+        # Split by observation count (default)
+        n = len(df)
+        phase_size = n // 3
+        phases = {
+            'P1 (Early)': df.iloc[:phase_size],
+            'P2 (Middle)': df.iloc[phase_size:2*phase_size],
+            'P3 (Near Expiry)': df.iloc[2*phase_size:]
+        }
+
+    return phases
+
 # ============================================================================
 # DATA FUNCTIONS
 # ============================================================================
@@ -175,7 +214,7 @@ def load_market_data(market_key):
 
 
 @st.cache_data
-def compute_all_regressions(market_key):
+def compute_all_regressions(market_key, split_method='snapshot'):
     """Compute all 243 regressions and return summary dataframe"""
     raw_ofi_df = load_market_data(market_key)
     if raw_ofi_df is None:
@@ -198,13 +237,8 @@ def compute_all_regressions(market_key):
             if len(df_clean) < 150:
                 continue
 
-            n = len(df_clean)
-            phase_size = n // 3
-            phases = {
-                'P1 (Early)': df_clean.iloc[:phase_size],
-                'P2 (Middle)': df_clean.iloc[phase_size:2*phase_size],
-                'P3 (Near Expiry)': df_clean.iloc[2*phase_size:]
-            }
+            # Use the chosen split method
+            phases = split_into_phases(df_clean, split_method)
 
             for phase_name, phase_df in phases.items():
                 if len(phase_df) > 2:
@@ -242,16 +276,28 @@ def main():
     with st.sidebar:
         st.header("Market Selection")
         market_options = list(MARKETS.keys())
+        default_idx = market_options.index("NYC Mayoral Election 2025 (Zohran Mamdani)")
         selected_market = st.selectbox(
             "Choose Market",
             options=market_options,
-            index=0
+            index=default_idx
         )
         st.info(f"**{MARKETS[selected_market]['description']}**")
 
+        st.divider()
+
+        # Phase splitting method
+        st.header("Phase Split Method")
+        split_method = st.selectbox(
+            "How to divide into 3 phases?",
+            options=['snapshot', 'date'],
+            format_func=lambda x: 'By Observation Count' if x == 'snapshot' else 'By Calendar Time',
+            help="Snapshot: equal # of observations per phase. Date: equal time periods."
+        )
+
     # Compute regressions
     with st.spinner("Computing 243 regressions..."):
-        master_df = compute_all_regressions(selected_market)
+        master_df = compute_all_regressions(selected_market, split_method)
 
     if master_df is None or len(master_df) == 0:
         st.error("No data available")

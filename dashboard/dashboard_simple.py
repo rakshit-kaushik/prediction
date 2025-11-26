@@ -432,7 +432,46 @@ def plot_depth_evolution(df):
     return fig
 
 
-def plot_ofi_three_phases(df):
+def split_into_phases(df, split_method='snapshot'):
+    """
+    Split dataframe into 3 phases based on chosen method.
+
+    Args:
+        df: DataFrame with timestamp column
+        split_method: 'snapshot' (by observation count) or 'date' (by calendar time)
+
+    Returns:
+        dict of phase_name -> DataFrame
+    """
+    if split_method == 'date':
+        # Split by calendar time
+        min_time = df['timestamp'].min()
+        max_time = df['timestamp'].max()
+        total_duration = max_time - min_time
+        one_third = total_duration / 3
+
+        cutoff1 = min_time + one_third
+        cutoff2 = min_time + 2 * one_third
+
+        phases = {
+            'Phase 1 (Early)': df[df['timestamp'] < cutoff1],
+            'Phase 2 (Middle)': df[(df['timestamp'] >= cutoff1) & (df['timestamp'] < cutoff2)],
+            'Phase 3 (Near Expiry)': df[df['timestamp'] >= cutoff2]
+        }
+    else:
+        # Split by observation count (default)
+        n = len(df)
+        phase_size = n // 3
+        phases = {
+            'Phase 1 (Early)': df.iloc[:phase_size],
+            'Phase 2 (Middle)': df.iloc[phase_size:2*phase_size],
+            'Phase 3 (Near Expiry)': df.iloc[2*phase_size:]
+        }
+
+    return phases
+
+
+def plot_ofi_three_phases(df, split_method='snapshot'):
     """Plot OFI vs price change for 3 phases of market"""
     # Get dependent variable from config
     dep_var = get_dependent_variable_name()
@@ -444,15 +483,8 @@ def plot_ofi_three_phases(df):
     if len(df_clean) < 150:  # Need at least 50 per phase
         return None, None
 
-    # Divide into 3 equal phases
-    n = len(df_clean)
-    phase_size = n // 3
-
-    phases = {
-        'Phase 1 (Early)': df_clean.iloc[:phase_size],
-        'Phase 2 (Middle)': df_clean.iloc[phase_size:2*phase_size],
-        'Phase 3 (Near Expiry)': df_clean.iloc[2*phase_size:]
-    }
+    # Divide into 3 phases using chosen method
+    phases = split_into_phases(df_clean, split_method)
 
     # Create 3 subplots
     from plotly.subplots import make_subplots
@@ -602,7 +634,7 @@ def get_outlier_methods(df):
     }
 
 
-def render_time_window_analysis(raw_ofi_df, time_window_minutes, start_datetime, end_datetime):
+def render_time_window_analysis(raw_ofi_df, time_window_minutes, start_datetime, end_datetime, split_method='snapshot'):
     """
     Render all 9 outlier methods for a specific time window.
 
@@ -611,6 +643,7 @@ def render_time_window_analysis(raw_ofi_df, time_window_minutes, start_datetime,
         time_window_minutes: Time window in minutes (e.g., 10)
         start_datetime: Start datetime for filtering
         end_datetime: End datetime for filtering
+        split_method: 'snapshot' or 'date' for phase splitting
 
     Returns:
         list: Summary statistics for all methods
@@ -650,7 +683,7 @@ def render_time_window_analysis(raw_ofi_df, time_window_minutes, start_datetime,
             st.caption(caption)
 
         # Generate 3-phase plot
-        fig_phases, phase_results = plot_ofi_three_phases(method_df)
+        fig_phases, phase_results = plot_ofi_three_phases(method_df, split_method)
 
         if fig_phases:
             st.plotly_chart(fig_phases, use_container_width=True)
@@ -729,6 +762,17 @@ def main():
 
         market_config = MARKETS[selected_market]
         st.info(f"**{market_config['description']}**")
+
+        st.divider()
+
+        # Phase splitting method
+        st.header("Phase Split Method")
+        split_method = st.selectbox(
+            "How to divide into 3 phases?",
+            options=['snapshot', 'date'],
+            format_func=lambda x: 'By Observation Count' if x == 'snapshot' else 'By Calendar Time',
+            help="Snapshot: equal # of observations per phase. Date: equal time periods."
+        )
 
         st.divider()
 
@@ -875,12 +919,13 @@ def main():
                     if len(df_clean) < 150:
                         continue
 
-                    n = len(df_clean)
-                    phase_size = n // 3
+                    # Use the chosen split method
+                    phases_dict = split_into_phases(df_clean, split_method)
+                    # Rename keys to short form
                     phases = {
-                        'P1 (Early)': df_clean.iloc[:phase_size],
-                        'P2 (Middle)': df_clean.iloc[phase_size:2*phase_size],
-                        'P3 (Near Expiry)': df_clean.iloc[2*phase_size:]
+                        'P1 (Early)': phases_dict['Phase 1 (Early)'],
+                        'P2 (Middle)': phases_dict['Phase 2 (Middle)'],
+                        'P3 (Near Expiry)': phases_dict['Phase 3 (Near Expiry)']
                     }
 
                     from scipy import stats
@@ -976,7 +1021,7 @@ def main():
             st.markdown(f"Aggregating OFI data into {tw}-minute intervals, then applying 9 outlier methods")
 
             # Render analysis for this time window
-            render_time_window_analysis(raw_ofi_df, tw, start_datetime, end_datetime)
+            render_time_window_analysis(raw_ofi_df, tw, start_datetime, end_datetime, split_method)
 
 
 if __name__ == "__main__":
