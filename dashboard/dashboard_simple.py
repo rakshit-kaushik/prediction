@@ -64,19 +64,87 @@ MARKETS = {
 }
 
 # ============================================================================
+# OUTLIER FILTERING FUNCTIONS
+# ============================================================================
+
+def filter_outliers_iqr(df, column='ofi', multiplier=1.5):
+    """Remove outliers using IQR method"""
+    df = df.copy()
+    Q1 = df[column].quantile(0.25)
+    Q3 = df[column].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - multiplier * IQR
+    upper = Q3 + multiplier * IQR
+    return df[(df[column] >= lower) & (df[column] <= upper)]
+
+def filter_outliers_percentile(df, column='ofi', lower_pct=0.01, upper_pct=0.99):
+    """Remove outliers using percentile trimming"""
+    df = df.copy()
+    lower = df[column].quantile(lower_pct)
+    upper = df[column].quantile(upper_pct)
+    return df[(df[column] >= lower) & (df[column] <= upper)]
+
+def filter_outliers_zscore(df, column='ofi', threshold=3):
+    """Remove outliers using Z-score method"""
+    df = df.copy()
+    mean = df[column].mean()
+    std = df[column].std()
+    if std == 0:
+        return df
+    z_scores = (df[column] - mean) / std
+    return df[z_scores.abs() <= threshold]
+
+def winsorize_data(df, column='ofi', limits=(0.01, 0.01)):
+    """Cap extreme values at percentile limits (doesn't remove, just caps)"""
+    df = df.copy()
+    lower = df[column].quantile(limits[0])
+    upper = df[column].quantile(1 - limits[1])
+    df[column] = df[column].clip(lower=lower, upper=upper)
+    return df
+
+def filter_absolute_threshold(df, column='ofi', lower=-200000, upper=200000):
+    """Remove outliers using absolute threshold - keep only values within range"""
+    df = df.copy()
+    return df[(df[column] >= lower) & (df[column] <= upper)]
+
+def filter_outliers_mad(df, column='ofi', threshold=3):
+    """Remove outliers using Median Absolute Deviation (more robust than Z-score)"""
+    df = df.copy()
+    median = df[column].median()
+    mad = np.median(np.abs(df[column] - median))
+    if mad == 0:
+        return df
+    modified_z = 0.6745 * (df[column] - median) / mad
+    return df[np.abs(modified_z) <= threshold]
+
+def filter_outliers_percentile_aggressive(df, column='ofi', lower_pct=0.05, upper_pct=0.95):
+    """Remove outliers using aggressive percentile trimming (5% each tail)"""
+    df = df.copy()
+    lower = df[column].quantile(lower_pct)
+    upper = df[column].quantile(upper_pct)
+    return df[(df[column] >= lower) & (df[column] <= upper)]
+
+# ============================================================================
 # TIME AGGREGATION (Per Cont et al. 2011)
 # ============================================================================
 
-def aggregate_ofi_data(df):
+def aggregate_ofi_data(df, time_window=None):
     """
     Aggregate raw orderbook snapshots using configurable time window following
     Cont et al. (2011) methodology.
 
     This matches the aggregation used in all analysis scripts.
-    Uses TIME_WINDOW from config_analysis.py (e.g., '10T' for 10 minutes).
+
+    Args:
+        df: DataFrame with raw orderbook data
+        time_window: Time window string (e.g., '10T' for 10 minutes).
+                     If None, uses TIME_WINDOW from config.
     """
     if df is None or len(df) == 0:
         return df
+
+    # Use provided time_window or fall back to config
+    tw = time_window if time_window is not None else TIME_WINDOW
 
     # Ensure timestamp is datetime
     if 'timestamp' not in df.columns and 'timestamp_ms' in df.columns:
@@ -90,8 +158,10 @@ def aggregate_ofi_data(df):
     # Sort by timestamp
     df = df.sort_values('timestamp').reset_index(drop=True)
 
-    # Create time bins using configurable TIME_WINDOW
-    df['time_bin'] = df['timestamp'].dt.floor(TIME_WINDOW)
+    # Create time bins using provided time window
+    # Convert 'T' format to 'min' format (pandas deprecation)
+    tw_clean = tw.replace('T', 'min') if isinstance(tw, str) else tw
+    df['time_bin'] = df['timestamp'].dt.floor(tw_clean)
 
     # Define aggregation rules
     agg_dict = {
@@ -348,75 +418,123 @@ def plot_depth_evolution(df):
     return fig
 
 
-def plot_ofi_analysis(df):
-    """Plot OFI vs price change using configurable dependent variable"""
+def plot_ofi_three_phases(df):
+    """Plot OFI vs price change for 3 phases of market"""
     # Get dependent variable from config
     dep_var = get_dependent_variable_name()
     dep_var_label = get_dependent_variable_label()
 
-    # Filter non-zero OFI
-    df_nonzero = df[(df['ofi'] != 0) | (df[dep_var] != 0)].copy()
+    # Remove NaN values
+    df_clean = df.dropna(subset=['ofi', dep_var]).copy()
 
-    if len(df_nonzero) == 0:
-        return None
+    if len(df_clean) < 150:  # Need at least 50 per phase
+        return None, None
 
-    fig = go.Figure()
+    # Divide into 3 equal phases
+    n = len(df_clean)
+    phase_size = n // 3
 
-    # Scatter plot
-    fig.add_trace(go.Scatter(
-        x=df_nonzero['ofi'],
-        y=df_nonzero[dep_var],
-        mode='markers',
-        marker=dict(
-            size=5,
-            color=df_nonzero[dep_var],
-            colorscale='RdYlGn',
-            showscale=True,
-            colorbar=dict(title=dep_var_label),
-            opacity=0.6
-        ),
-        hovertemplate=f'<b>OFI:</b> %{{x:.2f}}<br><b>{dep_var_label}:</b> %{{y:.6f}}<extra></extra>'
-    ))
+    phases = {
+        'Phase 1 (Early)': df_clean.iloc[:phase_size],
+        'Phase 2 (Middle)': df_clean.iloc[phase_size:2*phase_size],
+        'Phase 3 (Near Expiry)': df_clean.iloc[2*phase_size:]
+    }
 
-    # Add regression line
-    from scipy import stats
-    if len(df_nonzero) > 2:
-        slope, intercept, r_value, p_value, std_err = stats.linregress(
-            df_nonzero['ofi'], df_nonzero[dep_var]
-        )
-
-        x_range = np.array([df_nonzero['ofi'].min(), df_nonzero['ofi'].max()])
-        y_pred = slope * x_range + intercept
-
-        fig.add_trace(go.Scatter(
-            x=x_range,
-            y=y_pred,
-            mode='lines',
-            name=f'Fit: R²={r_value**2:.4f}',
-            line=dict(color='red', width=2, dash='dash'),
-            hovertemplate='<b>Regression Line</b><extra></extra>'
-        ))
-
-        # Add annotation
-        fig.add_annotation(
-            x=0.05, y=0.95,
-            xref='paper', yref='paper',
-            text=f'R² = {r_value**2:.4f}<br>β = {slope:.2e}<br>p-value = {p_value:.2e}',
-            showarrow=False,
-            bgcolor='white',
-            bordercolor='black',
-            borderwidth=1
-        )
-
-    fig.update_layout(
-        title="Order Flow Imbalance vs Price Change",
-        xaxis_title="OFI",
-        yaxis_title=dep_var_label,
-        hovermode='closest',
-        height=500
+    # Create 3 subplots
+    from plotly.subplots import make_subplots
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=list(phases.keys()),
+        horizontal_spacing=0.08
     )
 
-    return fig
+    colors = ['#2E86AB', '#A23B72', '#F77F00']
+    regression_results = []
+
+    from scipy import stats
+
+    for idx, (phase_name, phase_df) in enumerate(phases.items(), 1):
+        # Filter non-zero for visualization
+        phase_viz = phase_df[(phase_df['ofi'] != 0) | (phase_df[dep_var] != 0)].copy()
+
+        if len(phase_viz) == 0:
+            continue
+
+        # Scatter plot
+        fig.add_trace(
+            go.Scatter(
+                x=phase_viz['ofi'],
+                y=phase_viz[dep_var],
+                mode='markers',
+                marker=dict(
+                    size=4,
+                    color=colors[idx-1],
+                    opacity=0.5
+                ),
+                name=phase_name,
+                showlegend=False,
+                hovertemplate=f'<b>OFI:</b> %{{x:.2f}}<br><b>{dep_var_label}:</b> %{{y:.3f}}<extra></extra>'
+            ),
+            row=1, col=idx
+        )
+
+        # Regression
+        if len(phase_df) > 2:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                phase_df['ofi'], phase_df[dep_var]
+            )
+
+            x_range = np.array([phase_viz['ofi'].min(), phase_viz['ofi'].max()])
+            y_pred = slope * x_range + intercept
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_range,
+                    y=y_pred,
+                    mode='lines',
+                    line=dict(color='red', width=2),
+                    showlegend=False,
+                    hovertemplate='<b>Regression Line</b><extra></extra>'
+                ),
+                row=1, col=idx
+            )
+
+            # Add annotation with BLACK background
+            # Calculate x position based on subplot index (paper coordinates)
+            x_pos = (idx - 1) / 3 + 0.17  # Center of each subplot
+            fig.add_annotation(
+                x=x_pos, y=0.98,
+                xref='paper', yref='paper',
+                text=f'β = {slope:.2e}<br>R² = {r_value**2:.3f}<br>p = {p_value:.2e}',
+                showarrow=False,
+                bgcolor='black',
+                font=dict(color='white', size=10),
+                bordercolor='white',
+                borderwidth=1,
+                xanchor='center'
+            )
+
+            regression_results.append({
+                'Phase': phase_name,
+                'N': len(phase_df),
+                'Beta': slope,
+                'R²': r_value**2,
+                'p-value': p_value
+            })
+
+    # Update axes
+    for idx in range(1, 4):
+        fig.update_xaxes(title_text="OFI", row=1, col=idx)
+        if idx == 1:
+            fig.update_yaxes(title_text=dep_var_label, row=1, col=idx)
+
+    fig.update_layout(
+        title="OFI Price Impact Across Market Phases",
+        height=400,
+        showlegend=False
+    )
+
+    return fig, pd.DataFrame(regression_results)
 
 
 def plot_ofi_distribution(df):
@@ -448,32 +566,151 @@ def plot_ofi_distribution(df):
 
 
 # ============================================================================
+# TIME WINDOW ANALYSIS FUNCTIONS
+# ============================================================================
+
+# Time windows to analyze (in minutes)
+TIME_WINDOWS = [1, 5, 10, 15, 20, 30, 45, 60, 90]
+
+
+def get_outlier_methods(df):
+    """Return dictionary of all outlier filtering methods applied to df"""
+    return {
+        'Raw Data (No Filtering)': df.copy(),
+        'IQR Filtered (1.5xIQR)': filter_outliers_iqr(df, 'ofi'),
+        'Percentile Trimmed (1%-99%)': filter_outliers_percentile(df, 'ofi'),
+        'Z-Score Filtered (|Z|<=3)': filter_outliers_zscore(df, 'ofi'),
+        'Winsorized (1% caps)': winsorize_data(df, 'ofi'),
+        'Absolute Threshold (+-200k)': filter_absolute_threshold(df, 'ofi', -200000, 200000),
+        'Absolute Threshold (+-100k)': filter_absolute_threshold(df, 'ofi', -100000, 100000),
+        'MAD Filtered (3s)': filter_outliers_mad(df, 'ofi', 3),
+        'Percentile Trimmed (5%-95%)': filter_outliers_percentile_aggressive(df, 'ofi'),
+    }
+
+
+def render_time_window_analysis(raw_ofi_df, time_window_minutes, start_datetime, end_datetime):
+    """
+    Render all 9 outlier methods for a specific time window.
+
+    Args:
+        raw_ofi_df: Raw OFI DataFrame (not yet aggregated)
+        time_window_minutes: Time window in minutes (e.g., 10)
+        start_datetime: Start datetime for filtering
+        end_datetime: End datetime for filtering
+
+    Returns:
+        list: Summary statistics for all methods
+    """
+    time_window_str = f'{time_window_minutes}min'
+
+    # Aggregate data with this specific time window
+    aggregated_df = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
+
+    # Filter by date range
+    filtered_ofi = filter_by_date(aggregated_df, start_datetime, end_datetime)
+
+    if filtered_ofi is None or len(filtered_ofi) == 0:
+        st.warning(f"No data available for {time_window_minutes} min window")
+        return []
+
+    st.info(f"Aggregated to {len(filtered_ofi):,} intervals ({time_window_minutes} min each)")
+
+    # Get all outlier methods
+    outlier_methods = get_outlier_methods(filtered_ofi)
+
+    # Collect summary stats
+    summary_rows = []
+
+    # Display each method
+    for method_name, method_df in outlier_methods.items():
+        n_original = len(filtered_ofi)
+        n_filtered = len(method_df)
+        n_removed = n_original - n_filtered
+
+        st.markdown(f"---")
+        st.markdown(f"### {method_name}")
+        if n_removed > 0:
+            st.caption(f"{n_removed:,} observations removed ({100*n_removed/n_original:.1f}%)")
+        else:
+            caption = f"{n_filtered:,} observations (values capped)" if 'Winsorized' in method_name else f"{n_filtered:,} observations"
+            st.caption(caption)
+
+        # Generate 3-phase plot
+        fig_phases, phase_results = plot_ofi_three_phases(method_df)
+
+        if fig_phases:
+            st.plotly_chart(fig_phases, use_container_width=True)
+
+            # Add to summary
+            if phase_results is not None and len(phase_results) > 0:
+                for _, row in phase_results.iterrows():
+                    short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
+                    summary_rows.append({
+                        'Method': short_name,
+                        'Phase': row['Phase'].replace('Phase ', 'P'),
+                        'N': row['N'],
+                        'Beta': row['Beta'],
+                        'R2': row['R²'],
+                        'p-value': row['p-value']
+                    })
+        else:
+            st.warning(f"Not enough data after filtering for 3-phase analysis")
+
+    # Summary comparison table for this time window
+    if summary_rows:
+        st.markdown("---")
+        st.markdown("### Summary for This Time Window")
+        summary_df = pd.DataFrame(summary_rows)
+
+        # Pivot tables
+        pivot_r2 = summary_df.pivot(index='Method', columns='Phase', values='R2')
+        pivot_beta = summary_df.pivot(index='Method', columns='Phase', values='Beta')
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**R² by Method and Phase**")
+            st.dataframe(
+                pivot_r2.style.format('{:.4f}').background_gradient(cmap='Greens', axis=None),
+                use_container_width=True
+            )
+        with col2:
+            st.markdown("**β by Method and Phase**")
+            st.dataframe(
+                pivot_beta.style.format('{:.2e}'),
+                use_container_width=True
+            )
+
+    return summary_rows
+
+
+# ============================================================================
 # MAIN APP
 # ============================================================================
 
 def main():
     st.set_page_config(
-        page_title="OFI Analysis Dashboard",
+        page_title="OFI Multi-Time Analysis",
         layout="wide"
     )
 
-    st.title("OFI Analysis Dashboard")
-    st.markdown("**Interactive data exploration for Polymarket order flow analysis**")
+    st.title("OFI Multi-Time Window Analysis")
+    st.markdown("**Comparing 9 time windows x 9 outlier methods x 3 phases = 243 regressions**")
 
-    # Display configuration
-    time_window_str = TIME_WINDOW.replace('T', ' min').replace('S', ' sec')
     dep_var_label = get_dependent_variable_label()
-    st.caption(f"Configuration: Time Window = {time_window_str}, Price Units = {dep_var_label}")
+    st.caption(f"Price Units: {dep_var_label}")
 
-    # Sidebar - Market Selection
+    # Sidebar - Market Selection and Date/Time Filter
     with st.sidebar:
         st.header("Market Selection")
 
-        # Market dropdown
+        # Market dropdown - default to NYC
+        market_options = list(MARKETS.keys())
+        default_idx = market_options.index("NYC Mayoral Election 2025 (Zohran Mamdani)")
         selected_market = st.selectbox(
             "Choose Market",
-            options=list(MARKETS.keys()),
-            help="Select from pre-configured markets"
+            options=market_options,
+            index=default_idx,
+            help="Select market for analysis"
         )
 
         market_config = MARKETS[selected_market]
@@ -481,28 +718,28 @@ def main():
 
         st.divider()
 
-        # Load data
-        with st.spinner("Loading data..."):
-            ofi_df, orderbook_df, market_info = load_market_data(selected_market)
+        # Load raw data (not aggregated yet - we'll aggregate per tab)
+        with st.spinner("Loading raw data..."):
+            raw_ofi_df, orderbook_df, market_info = load_market_data(selected_market)
 
-        # Check if data loaded
-        if ofi_df is None or len(ofi_df) == 0:
-            st.error("No data found for this market")
+        if raw_ofi_df is None or len(raw_ofi_df) == 0:
+            st.error("No data found for NYC market")
             st.stop()
 
-        # Apply time aggregation (per Cont et al. 2011)
-        # Display time window in human-readable format
-        time_window_str = TIME_WINDOW.replace('T', ' min').replace('S', ' sec')
-        with st.spinner(f"Aggregating to {time_window_str} intervals..."):
-            raw_count = len(ofi_df)
-            ofi_df = aggregate_ofi_data(ofi_df)
-            st.success(f"✓ Aggregated {raw_count:,} snapshots → {len(ofi_df):,} {time_window_str} intervals")
+        # Ensure timestamp is datetime for date range calculation
+        if 'timestamp' not in raw_ofi_df.columns and 'timestamp_ms' in raw_ofi_df.columns:
+            raw_ofi_df['timestamp'] = pd.to_datetime(raw_ofi_df['timestamp_ms'], unit='ms', utc=True)
+        elif 'timestamp' in raw_ofi_df.columns:
+            if not pd.api.types.is_datetime64_any_dtype(raw_ofi_df['timestamp']):
+                raw_ofi_df['timestamp'] = pd.to_datetime(raw_ofi_df['timestamp'], format='mixed', utc=True)
+
+        st.success(f"Loaded {len(raw_ofi_df):,} raw snapshots")
 
         # Date range sliders
         st.header("Date/Time Filter")
 
-        min_date = ofi_df['timestamp'].min()
-        max_date = ofi_df['timestamp'].max()
+        min_date = raw_ofi_df['timestamp'].min()
+        max_date = raw_ofi_df['timestamp'].max()
 
         st.caption(f"Available: {min_date.strftime('%Y-%m-%d %H:%M')} to {max_date.strftime('%Y-%m-%d %H:%M')}")
 
@@ -544,7 +781,7 @@ def main():
         start_datetime = datetime.combine(start_date_only, start_time)
         end_datetime = datetime.combine(end_date_only, end_time)
 
-        # Validation: ensure start is before end
+        # Validation
         if start_datetime >= end_datetime:
             st.error("Start date/time must be before end date/time")
             st.stop()
@@ -557,51 +794,112 @@ def main():
 
         # Data info
         st.header("Data Info")
-        st.metric("Total Snapshots", f"{len(ofi_df):,}")
-        st.metric("Full Date Range", f"{(max_date - min_date).days} days")
+        st.metric("Raw Snapshots", f"{len(raw_ofi_df):,}")
+        st.metric("Date Range", f"{(max_date - min_date).days} days")
 
-    # Filter data by selected date range
-    filtered_ofi = filter_by_date(ofi_df, start_datetime, end_datetime)
-    filtered_orderbook = filter_by_date(orderbook_df, start_datetime, end_datetime)
+    # Store all results for master summary
+    all_summary_data = []
 
-    if filtered_ofi is None or len(filtered_ofi) == 0:
-        st.warning("No data in selected date range. Please adjust filters.")
-        st.stop()
+    # Create tabs: Home + 9 time windows
+    tab_names = ["Home"] + [f"{t} min" for t in TIME_WINDOWS]
+    tabs = st.tabs(tab_names)
 
-    # Main content area - tabs
-    tab1, tab2 = st.tabs([
-        "📈 Price & Depth",
-        "📊 OFI Analysis"
-    ])
+    # Home tab - Price & Depth analysis
+    with tabs[0]:
+        st.subheader("Price & Market Overview")
+        st.markdown("Overview of price evolution, spread, and order book depth")
 
-    with tab1:
-        st.subheader("Price Evolution")
-        fig_price = plot_price_evolution(filtered_ofi)
-        st.plotly_chart(fig_price, use_container_width=True)
+        # Aggregate with default 10min window for overview
+        overview_df = aggregate_ofi_data(raw_ofi_df.copy(), '10min')
+        filtered_overview = filter_by_date(overview_df, start_datetime, end_datetime)
 
-        col1, col2 = st.columns(2)
+        if filtered_overview is not None and len(filtered_overview) > 0:
+            st.info(f"Showing {len(filtered_overview):,} intervals (10-min aggregation)")
 
-        with col1:
-            st.subheader("Spread Analysis")
-            fig_spread = plot_spread_analysis(filtered_ofi)
-            st.plotly_chart(fig_spread, use_container_width=True)
+            # Price Evolution
+            st.subheader("Price Evolution")
+            fig_price = plot_price_evolution(filtered_overview)
+            st.plotly_chart(fig_price, use_container_width=True)
 
-        with col2:
-            st.subheader("Order Book Depth")
-            fig_depth = plot_depth_evolution(filtered_ofi)
-            st.plotly_chart(fig_depth, use_container_width=True)
+            col1, col2 = st.columns(2)
 
-    with tab2:
-        st.subheader("OFI vs Price Change")
-        fig_ofi = plot_ofi_analysis(filtered_ofi)
-        if fig_ofi:
-            st.plotly_chart(fig_ofi, use_container_width=True)
+            with col1:
+                st.subheader("Spread Analysis")
+                fig_spread = plot_spread_analysis(filtered_overview)
+                st.plotly_chart(fig_spread, use_container_width=True)
+
+            with col2:
+                st.subheader("Order Book Depth")
+                fig_depth = plot_depth_evolution(filtered_overview)
+                st.plotly_chart(fig_depth, use_container_width=True)
+
+            # OFI Distribution
+            st.subheader("OFI Distribution")
+            fig_ofi_dist = plot_ofi_distribution(filtered_overview)
+            st.plotly_chart(fig_ofi_dist, use_container_width=True)
         else:
-            st.info("No OFI data available for selected period")
+            st.warning("No data available for overview")
 
-        st.subheader("OFI Distribution")
-        fig_ofi_dist = plot_ofi_distribution(filtered_ofi)
-        st.plotly_chart(fig_ofi_dist, use_container_width=True)
+    # Time window tabs (tabs[1] through tabs[9])
+    for i, tw in enumerate(TIME_WINDOWS):
+        with tabs[i + 1]:  # +1 because tabs[0] is Home
+            st.subheader(f"Time Window: {tw} Minutes")
+            st.markdown(f"Aggregating OFI data into {tw}-minute intervals, then applying 9 outlier methods")
+
+            # Render analysis for this time window
+            summary_rows = render_time_window_analysis(raw_ofi_df, tw, start_datetime, end_datetime)
+
+            # Collect for master summary
+            for row in summary_rows:
+                row['TimeWindow'] = tw
+                all_summary_data.append(row)
+
+    # Master Summary Section
+    st.markdown("---")
+    st.markdown("# Master Summary: All Time Windows x All Methods")
+
+    if all_summary_data:
+        master_df = pd.DataFrame(all_summary_data)
+
+        # Create heatmap data: rows = time windows, columns = methods, values = avg R2 across phases
+        avg_r2_by_tw_method = master_df.groupby(['TimeWindow', 'Method'])['R2'].mean().reset_index()
+        pivot_master = avg_r2_by_tw_method.pivot(index='TimeWindow', columns='Method', values='R2')
+
+        st.markdown("### Average R² Across Phases (Heatmap)")
+        st.markdown("Rows = Time Windows (minutes), Columns = Outlier Methods")
+
+        # Display as heatmap
+        st.dataframe(
+            pivot_master.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+            use_container_width=True,
+            height=400
+        )
+
+        # Find best combination
+        best_idx = avg_r2_by_tw_method['R2'].idxmax()
+        best_row = avg_r2_by_tw_method.loc[best_idx]
+        st.success(f"**Best Combination**: {best_row['TimeWindow']} min + {best_row['Method']} (Avg R² = {best_row['R2']:.4f})")
+
+        # Phase-specific analysis
+        st.markdown("### Best R² by Phase")
+        for phase in ['P1 (Early)', 'P2 (Middle)', 'P3 (Near Expiry)']:
+            phase_data = master_df[master_df['Phase'] == phase]
+            if len(phase_data) > 0:
+                best_phase_idx = phase_data['R2'].idxmax()
+                best_phase = phase_data.loc[best_phase_idx]
+                st.write(f"**{phase}**: {best_phase['TimeWindow']} min + {best_phase['Method']} (R² = {best_phase['R2']:.4f})")
+
+        # Download full results
+        st.markdown("### Download Full Results")
+        csv = master_df.to_csv(index=False)
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name="ofi_multi_time_analysis.csv",
+            mime="text/csv"
+        )
+    else:
+        st.warning("No data available for summary")
 
 
 if __name__ == "__main__":
