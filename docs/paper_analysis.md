@@ -173,7 +173,7 @@ Estimated separately for each half-hour interval i.
 - **Average R² = 65%** (surprisingly high!)
 - β coefficient almost always significant (95% z-test)
 - Intercept α mostly insignificant
-- Linear model fits well (quadratic term insignificant)
+- Linear model fits well
 
 **Figure 2:** Scatter plot showing linear relationship
 
@@ -188,7 +188,6 @@ Estimated separately for each half-hour interval i.
 - **NYC Market**: OFI correlation = 0.2230
 - [ ] Create scatter plots (Figure 2 equivalent)
 - [ ] Create results table (Table 2 equivalent)
-- [ ] Test quadratic term
 - [ ] Analyze residuals (kurtosis, heteroscedasticity)
 
 **Our Results So Far:**

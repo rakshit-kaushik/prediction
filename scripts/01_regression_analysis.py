@@ -243,73 +243,6 @@ def run_linear_regression(df):
         return None
 
 
-def run_quadratic_regression(df):
-    """
-    Run quadratic regression: ΔP = α + β₁×OFI + β₂×OFI² + ε
-
-    Returns dict with regression statistics
-    """
-    # Get dependent variable name from config (delta_mid_price or delta_mid_price_ticks)
-    dep_var = get_dependent_variable_name()
-
-    # Remove NaN values
-    valid_mask = ~(df[dep_var].isna() | df['ofi'].isna())
-    y = df.loc[valid_mask, dep_var].values
-    X1 = df.loc[valid_mask, 'ofi'].values
-    X2 = X1 ** 2
-
-    n = len(y)
-    if n == 0:
-        return None
-
-    # Design matrix with intercept
-    X_with_intercept = np.column_stack([np.ones(n), X1, X2])
-
-    # OLS estimation
-    try:
-        beta_hat = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
-        alpha_hat, beta1_hat, beta2_hat = beta_hat[0], beta_hat[1], beta_hat[2]
-
-        # Predictions and residuals
-        y_pred = X_with_intercept @ beta_hat
-        residuals = y - y_pred
-
-        # R-squared
-        SST = np.sum((y - np.mean(y))**2)
-        SSR = np.sum((y_pred - np.mean(y))**2)
-        SSE = np.sum(residuals**2)
-        r_squared = SSR / SST if SST > 0 else 0
-        adj_r_squared = 1 - (1 - r_squared) * (n - 1) / (n - 3) if n > 3 else 0
-
-        # Standard errors
-        df_resid = n - 3
-        s_squared = SSE / df_resid if df_resid > 0 else 0
-        X_T_X_inv = np.linalg.inv(X_with_intercept.T @ X_with_intercept)
-        var_cov = s_squared * X_T_X_inv
-        se = np.sqrt(np.diag(var_cov))
-        se_alpha, se_beta1, se_beta2 = se[0], se[1], se[2]
-
-        # t-statistics
-        t_beta2 = beta2_hat / se_beta2 if se_beta2 > 0 else 0
-        p_beta2 = 2 * (1 - stats.t.cdf(abs(t_beta2), df_resid)) if df_resid > 0 else 1
-
-        return {
-            'alpha': alpha_hat,
-            'beta1': beta1_hat,
-            'beta2': beta2_hat,
-            'se_beta2': se_beta2,
-            't_beta2': t_beta2,
-            'p_beta2': p_beta2,
-            'r_squared': r_squared,
-            'adj_r_squared': adj_r_squared,
-            'n_obs': n,
-            'sse': SSE
-        }
-    except Exception as e:
-        print(f"Error in quadratic regression: {e}")
-        return None
-
-
 # ============================================================================
 # ANALYSIS
 # ============================================================================
@@ -369,34 +302,10 @@ def analyze_market(market_name, market_config):
         is_significant = linear_results['p_beta'] < 0.05
         print(f"\n    β is {'✓ SIGNIFICANT' if is_significant else '✗ NOT SIGNIFICANT'} at 5% level")
 
-    print(f"\n{'-'*80}")
-    print("Running Quadratic Regression: ΔP = α + β₁×OFI + β₂×OFI² + ε")
-    quad_results = run_quadratic_regression(df)
-
-    if quad_results:
-        print(f"\n  Results:")
-        print(f"    α (intercept) = {quad_results['alpha']:.6f}")
-        print(f"    β₁ (linear)   = {quad_results['beta1']:.6f}")
-        print(f"    β₂ (quadratic)= {quad_results['beta2']:.10f}")
-        print(f"    R²            = {quad_results['r_squared']:.4f}")
-        print(f"    Adj R²        = {quad_results['adj_r_squared']:.4f}")
-        print(f"    t(β₂)         = {quad_results['t_beta2']:.4f}")
-        print(f"    p(β₂)         = {quad_results['p_beta2']:.6f}")
-
-        # Check if quadratic term is significant
-        is_quad_significant = quad_results['p_beta2'] < 0.05
-        print(f"\n    β₂ is {'✓ SIGNIFICANT' if is_quad_significant else '✗ NOT SIGNIFICANT'} at 5% level")
-
-        # Compare R² improvement
-        if linear_results:
-            r2_improvement = quad_results['r_squared'] - linear_results['r_squared']
-            print(f"    R² improvement from quadratic term: {r2_improvement:.6f} ({100*r2_improvement:.2f}%)")
-
     return {
         'market_name': market_name,
         'market_short': market_config['name_short'],
         'linear': linear_results,
-        'quadratic': quad_results,
         'n_obs': len(df)
     }
 
@@ -408,7 +317,6 @@ def create_summary_table(all_results):
     for result in all_results:
         if result and result['linear']:
             lin = result['linear']
-            quad = result['quadratic']
 
             row = {
                 'Market': result['market_short'],
@@ -426,13 +334,6 @@ def create_summary_table(all_results):
                 'RMSE': lin['rmse']
             }
 
-            if quad:
-                row['Beta2_Quad'] = quad['beta2']
-                row['t_Beta2'] = quad['t_beta2']
-                row['p_Beta2'] = quad['p_beta2']
-                row['R2_Quad'] = quad['r_squared']
-                row['R2_Improvement'] = quad['r_squared'] - lin['r_squared']
-
             rows.append(row)
 
     return pd.DataFrame(rows)
@@ -447,8 +348,7 @@ def main():
     print("REGRESSION ANALYSIS - CONT ET AL. (2011) REPLICATION")
     print("="*80)
     print("\nReplicating Section 3.2: Empirical Findings")
-    print("Linear model: ΔP = α + β × OFI + ε")
-    print("Quadratic model: ΔP = α + β₁×OFI + β₂×OFI² + ε\n")
+    print("Linear model: ΔP = α + β × OFI + ε\n")
 
     # Print configuration
     print_config()
@@ -487,16 +387,7 @@ def main():
             rows = []
             if result['linear']:
                 for key, value in result['linear'].items():
-                    rows.append({'Statistic': key, 'Linear_Model': value, 'Quadratic_Model': None})
-
-            if result['quadratic']:
-                quad_keys = set(result['quadratic'].keys())
-                for key in quad_keys:
-                    existing_row = next((r for r in rows if r['Statistic'] == key), None)
-                    if existing_row:
-                        existing_row['Quadratic_Model'] = result['quadratic'][key]
-                    else:
-                        rows.append({'Statistic': key, 'Linear_Model': None, 'Quadratic_Model': result['quadratic'][key]})
+                    rows.append({'Statistic': key, 'Value': value})
 
             detailed_df = pd.DataFrame(rows)
             detailed_df.to_csv(detailed_file, index=False)
@@ -511,10 +402,6 @@ def main():
     print(f"Average β: {summary_df['Beta'].mean():.6f}")
     print(f"Average Correlation: {summary_df['Correlation'].mean():.4f}")
     print(f"Markets with significant β (p < 0.05): {(summary_df['p_Beta'] < 0.05).sum()} / {len(summary_df)}")
-
-    if 'R2_Improvement' in summary_df.columns:
-        print(f"Average R² improvement from quadratic: {summary_df['R2_Improvement'].mean():.6f}")
-        print(f"Markets with significant β₂ (p < 0.05): {(summary_df['p_Beta2'] < 0.05).sum()} / {len(summary_df)}")
 
     print(f"\n{'='*80}")
     print("✓ REGRESSION ANALYSIS COMPLETE")

@@ -37,7 +37,6 @@ USE_TICK_NORMALIZED = True
 
 # Models to run
 RUN_LINEAR_MODEL = True  # ΔP = α + β × OFI + ε
-RUN_QUADRATIC_MODEL = True  # ΔP = α + β₁×OFI + β₂×OFI² + ε
 
 # Minimum observations required for regression
 MIN_OBS_FOR_REGRESSION = 30
@@ -105,7 +104,6 @@ def print_config():
     print(f"Tick Size: ${TICK_SIZE}")
     print(f"Use Tick Normalization: {USE_TICK_NORMALIZED}")
     print(f"Dependent Variable: {get_dependent_variable_name()}")
-    print(f"Linear Model: {'Enabled' if RUN_LINEAR_MODEL else 'Disabled'}")
-    print(f"Quadratic Model: {'Enabled' if RUN_QUADRATIC_MODEL else 'Disabled'}")
+    print(f"Regression Model: Linear (ΔP = α + β×OFI + ε)")
     print(f"Number of Phases: {N_PHASES}")
     print("=" * 80)

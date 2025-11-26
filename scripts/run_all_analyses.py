@@ -25,7 +25,7 @@ SCRIPTS = [
     {
         "name": "Regression Analysis",
         "file": "scripts/01_regression_analysis.py",
-        "description": "Linear and quadratic OFI regression models"
+        "description": "Linear OFI regression analysis"
     },
     {
         "name": "Figure 2 - Scatter Plots",

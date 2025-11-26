@@ -123,7 +123,7 @@ This project replicates the key findings from "The Price Impact of Order Book Ev
 ## Files Generated
 
 ### Analysis Scripts (`scripts/`)
-1. `01_regression_analysis.py` - Linear/quadratic OFI regression
+1. `01_regression_analysis.py` - Linear OFI regression
 2. `02_create_figure_2.py` - Scatter plots with regression lines
 3. `03_residual_diagnostics.py` - Model validation
 4. `04_depth_analysis.py` - Rolling window β vs depth analysis
