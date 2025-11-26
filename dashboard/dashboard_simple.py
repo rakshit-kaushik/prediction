@@ -30,14 +30,28 @@ import json
 import sys
 
 # Add parent directory to path to import config
-sys.path.append(str(Path(__file__).parent.parent))
-from scripts.config_analysis import (
-    TIME_WINDOW,
-    TICK_SIZE,
-    USE_TICK_NORMALIZED,
-    get_dependent_variable_name,
-    get_dependent_variable_label
-)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Try to import config, with fallback defaults for Streamlit Cloud
+try:
+    from scripts.config_analysis import (
+        TIME_WINDOW,
+        TICK_SIZE,
+        USE_TICK_NORMALIZED,
+        get_dependent_variable_name,
+        get_dependent_variable_label
+    )
+except ImportError:
+    # Fallback defaults if config import fails (e.g., on Streamlit Cloud)
+    TIME_WINDOW = '10min'
+    TICK_SIZE = 0.01
+    USE_TICK_NORMALIZED = True
+
+    def get_dependent_variable_name():
+        return 'delta_mid_price_ticks' if USE_TICK_NORMALIZED else 'delta_mid_price'
+
+    def get_dependent_variable_label():
+        return 'Price Change (ticks)' if USE_TICK_NORMALIZED else 'Price Change ($)'
 
 # ============================================================================
 # CONFIGURATION
