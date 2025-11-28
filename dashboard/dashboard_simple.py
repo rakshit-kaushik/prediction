@@ -26,6 +26,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from pathlib import Path
+from scipy import stats
 import json
 import sys
 
@@ -72,6 +73,7 @@ MARKETS = {
         "ofi_file": "nyc_mayor_oct15_nov04_ofi.csv",
         "orderbook_file": "nyc_mayor_oct15_nov04_processed.csv",
         "market_info_file": "nyc_mayor_market_info.json",
+        "trades_file": "nyc_mayor_oct15_nov04_trades_processed.csv",
         "description": "Will Zohran Mamdani win the 2025 NYC mayoral election?",
         "date_range": ("2025-10-15", "2025-11-04")
     }
@@ -915,6 +917,536 @@ def render_time_window_analysis(raw_ofi_df, time_window_minutes, start_datetime,
 
 
 # ============================================================================
+# DEPTH ANALYSIS RENDER FUNCTION
+# ============================================================================
+
+def compute_depth_analysis(raw_ofi_df, split_method):
+    """Compute beta vs average depth for all configurations"""
+    results = []
+    dep_var = get_dependent_variable_name()
+
+    for tw in TIME_WINDOWS:
+        time_window_str = f'{tw}min'
+        aggregated_df = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
+
+        if aggregated_df is None or len(aggregated_df) == 0:
+            continue
+
+        # Apply outlier methods
+        outlier_methods = get_outlier_methods(aggregated_df)
+
+        for method_idx, (method_name, method_df) in enumerate(outlier_methods.items()):
+            df_clean = method_df.dropna(subset=['ofi', dep_var]).copy()
+            if len(df_clean) < 50:
+                continue
+
+            # Split into phases
+            phases_dict = split_into_phases(df_clean, split_method)
+            phases = {
+                'Early': phases_dict['Phase 1 (Early)'],
+                'Middle': phases_dict['Phase 2 (Middle)'],
+                'Near Expiry': phases_dict['Phase 3 (Near Expiry)']
+            }
+
+            for phase_name, phase_df in phases.items():
+                if len(phase_df) < 10:
+                    continue
+
+                # Run regression
+                slope, intercept, r_value, p_value, std_err = stats.linregress(
+                    phase_df['ofi'], phase_df[dep_var]
+                )
+
+                # Calculate average depths
+                ad_level1 = (phase_df['best_bid_size'].mean() + phase_df['best_ask_size'].mean()) / 2
+                ad_level2 = (phase_df['total_bid_size'].mean() + phase_df['total_ask_size'].mean()) / 2
+
+                results.append({
+                    'time_window': tw,
+                    'outlier_method': method_name,
+                    'phase': phase_name,
+                    'beta': slope,
+                    'r_squared': r_value ** 2,
+                    'p_value': p_value,
+                    'ad_level1': ad_level1,
+                    'ad_level2': ad_level2,
+                    'n_obs': len(phase_df)
+                })
+
+    return pd.DataFrame(results) if results else None
+
+
+def plot_beta_vs_depth(data_points, method_name, depth_type='level1'):
+    """Create scatter plot of beta vs average depth"""
+    import plotly.graph_objects as go
+
+    ad_col = f'ad_{depth_type}'
+    fig = go.Figure()
+
+    colors = {'Early': '#2E86AB', 'Middle': '#A23B72', 'Near Expiry': '#F18F01'}
+    markers = {'Early': 'circle', 'Middle': 'square', 'Near Expiry': 'diamond'}
+
+    for point in data_points:
+        fig.add_trace(go.Scatter(
+            x=[point[ad_col]],
+            y=[point['beta']],
+            mode='markers+text',
+            marker=dict(
+                color=colors.get(point['phase'], '#333'),
+                size=12,
+                symbol=markers.get(point['phase'], 'circle')
+            ),
+            text=[point['phase'][0]],
+            textposition='top center',
+            name=point['phase'],
+            showlegend=False
+        ))
+
+    # Add trend line
+    if len(data_points) >= 2:
+        x_vals = [p[ad_col] for p in data_points]
+        y_vals = [p['beta'] for p in data_points]
+
+        if len(x_vals) >= 2:
+            slope, intercept, _, _, _ = stats.linregress(x_vals, y_vals)
+            x_line = [min(x_vals), max(x_vals)]
+            y_line = [slope * x + intercept for x in x_line]
+
+            fig.add_trace(go.Scatter(
+                x=x_line, y=y_line,
+                mode='lines',
+                line=dict(color='gray', dash='dash', width=1),
+                showlegend=False
+            ))
+
+            direction = "↓ β decreases" if slope < 0 else "↑ β increases"
+            color = "green" if slope < 0 else "red"
+            fig.add_annotation(
+                text=direction,
+                xref="paper", yref="paper",
+                x=0.5, y=-0.15,
+                showarrow=False,
+                font=dict(size=9, color=color),
+                xanchor='center'
+            )
+
+    fig.update_layout(
+        title=dict(text=method_name, font=dict(size=11)),
+        xaxis_title="Average Depth (AD)",
+        yaxis_title="Beta (Price Impact)",
+        height=280,
+        margin=dict(l=60, r=20, t=40, b=60),
+        showlegend=False
+    )
+
+    return fig
+
+
+def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime):
+    """Render the Depth Analysis content"""
+    st.header("Depth Analysis: Beta vs Average Depth")
+    st.markdown("**Testing: Beta = c / AD^lambda (Cont et al. 2011)**")
+    st.markdown("*Does price impact decrease as market depth increases?*")
+
+    with st.spinner("Computing beta-depth analysis (81 configs x 3 phases)..."):
+        results_df = compute_depth_analysis(raw_ofi_df, split_method)
+
+    if results_df is None or len(results_df) == 0:
+        st.error("No results computed. Check data availability.")
+        return
+
+    st.success(f"Computed {len(results_df)} beta-depth pairs")
+
+    # Create tabs
+    tabs = st.tabs(["Level 1 Depth", "Level 2 Depth", "Comparison", "Summary"])
+
+    # Tab 1: Level 1 Depth
+    with tabs[0]:
+        st.subheader("Level 1 Depth Analysis")
+        st.markdown("**AD = (best_bid_size + best_ask_size) / 2**")
+
+        for tw in TIME_WINDOWS:
+            st.markdown(f"### {tw} Minute Aggregation")
+            tw_data = results_df[results_df['time_window'] == tw]
+
+            if len(tw_data) == 0:
+                st.warning(f"No data for {tw} min window")
+                continue
+
+            outlier_methods = list(get_outlier_methods(pd.DataFrame({'ofi': [0]})).keys())
+            for row_idx in range(3):
+                cols = st.columns(3)
+                for col_idx in range(3):
+                    method_idx = row_idx * 3 + col_idx
+                    if method_idx < len(outlier_methods):
+                        method_name = outlier_methods[method_idx]
+                        method_data = tw_data[tw_data['outlier_method'] == method_name]
+
+                        with cols[col_idx]:
+                            if len(method_data) == 3:
+                                data_points = method_data.to_dict('records')
+                                fig = plot_beta_vs_depth(data_points, method_name, 'level1')
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.caption(f"{method_name}: Insufficient data")
+            st.markdown("---")
+
+    # Tab 2: Level 2 Depth
+    with tabs[1]:
+        st.subheader("Level 2 Depth Analysis")
+        st.markdown("**AD = (total_bid_size + total_ask_size) / 2**")
+
+        for tw in TIME_WINDOWS:
+            st.markdown(f"### {tw} Minute Aggregation")
+            tw_data = results_df[results_df['time_window'] == tw]
+
+            if len(tw_data) == 0:
+                continue
+
+            outlier_methods = list(get_outlier_methods(pd.DataFrame({'ofi': [0]})).keys())
+            for row_idx in range(3):
+                cols = st.columns(3)
+                for col_idx in range(3):
+                    method_idx = row_idx * 3 + col_idx
+                    if method_idx < len(outlier_methods):
+                        method_name = outlier_methods[method_idx]
+                        method_data = tw_data[tw_data['outlier_method'] == method_name]
+
+                        with cols[col_idx]:
+                            if len(method_data) == 3:
+                                data_points = method_data.to_dict('records')
+                                fig = plot_beta_vs_depth(data_points, method_name, 'level2')
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.caption(f"{method_name}: Insufficient data")
+            st.markdown("---")
+
+    # Tab 3: Comparison
+    with tabs[2]:
+        st.subheader("Level 1 vs Level 2 Comparison")
+
+        # Calculate % where beta decreases with AD
+        def calc_decrease_pct(df, ad_col):
+            count = 0
+            total = 0
+            for tw in TIME_WINDOWS:
+                outlier_methods = list(get_outlier_methods(pd.DataFrame({'ofi': [0]})).keys())
+                for method in outlier_methods:
+                    subset = df[(df['time_window'] == tw) & (df['outlier_method'] == method)]
+                    if len(subset) == 3:
+                        sorted_data = subset.sort_values(ad_col)
+                        betas = sorted_data['beta'].values
+                        if betas[0] > betas[2]:
+                            count += 1
+                        total += 1
+            return (count / total * 100) if total > 0 else 0
+
+        pct_l1 = calc_decrease_pct(results_df, 'ad_level1')
+        pct_l2 = calc_decrease_pct(results_df, 'ad_level2')
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### Level 1 (Best Bid/Ask)")
+            st.metric("% Configs Where Beta Decreases with AD", f"{pct_l1:.1f}%")
+        with col2:
+            st.markdown("### Level 2 (Full Orderbook)")
+            st.metric("% Configs Where Beta Decreases with AD", f"{pct_l2:.1f}%")
+
+        st.markdown("---")
+        st.markdown("### Interpretation")
+        st.markdown("""
+        - **Beta decreases as AD increases** = **Theory holds** (Cont et al. 2011)
+        - **Beta increases as AD increases** = **Theory doesn't hold**
+        """)
+
+        if pct_l1 > pct_l2:
+            st.success(f"**Level 1 depth** shows stronger support ({pct_l1:.1f}% vs {pct_l2:.1f}%)")
+        elif pct_l2 > pct_l1:
+            st.success(f"**Level 2 depth** shows stronger support ({pct_l2:.1f}% vs {pct_l1:.1f}%)")
+        else:
+            st.info("Both depth measures show similar support")
+
+    # Tab 4: Summary
+    with tabs[3]:
+        st.subheader("Summary Statistics")
+
+        avg_beta_by_phase = results_df.groupby('phase')['beta'].mean()
+        avg_ad_l1 = results_df.groupby('phase')['ad_level1'].mean()
+        avg_ad_l2 = results_df.groupby('phase')['ad_level2'].mean()
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**Avg Beta by Phase**")
+            for phase in ['Early', 'Middle', 'Near Expiry']:
+                if phase in avg_beta_by_phase.index:
+                    st.metric(phase, f"{avg_beta_by_phase[phase]:.2e}")
+        with col2:
+            st.markdown("**Avg L1 Depth by Phase**")
+            for phase in ['Early', 'Middle', 'Near Expiry']:
+                if phase in avg_ad_l1.index:
+                    st.metric(phase, f"{avg_ad_l1[phase]:,.0f}")
+        with col3:
+            st.markdown("**Avg L2 Depth by Phase**")
+            for phase in ['Early', 'Middle', 'Near Expiry']:
+                if phase in avg_ad_l2.index:
+                    st.metric(phase, f"{avg_ad_l2[phase]:,.0f}")
+
+        st.markdown("---")
+        st.markdown("### Full Results Table")
+        st.dataframe(
+            results_df.style.format({
+                'beta': '{:.2e}',
+                'r_squared': '{:.4f}',
+                'p_value': '{:.2e}',
+                'ad_level1': '{:,.0f}',
+                'ad_level2': '{:,.0f}',
+                'n_obs': '{:,.0f}'
+            }),
+            use_container_width=True,
+            height=400
+        )
+
+        csv = results_df.to_csv(index=False)
+        st.download_button("Download CSV", csv, "depth_analysis.csv", "text/csv")
+
+
+# ============================================================================
+# TI COMPARISON RENDER FUNCTION
+# ============================================================================
+
+def aggregate_trades_by_time_window(df, time_window_minutes):
+    """Aggregate trade data to calculate Trade Imbalance (TI)"""
+    if df is None or len(df) == 0:
+        return None
+
+    df = df.copy()
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    tw_str = f'{time_window_minutes}min'
+    df['time_bin'] = df['timestamp'].dt.floor(tw_str)
+
+    df['signed_volume'] = df['direction'] * df['shares_normalized']
+
+    agg = df.groupby('time_bin').agg({
+        'signed_volume': 'sum',
+        'shares_normalized': 'sum',
+        'direction': 'count',
+        'price': ['mean', 'first', 'last']
+    }).reset_index()
+
+    agg.columns = ['timestamp', 'trade_imbalance', 'total_volume', 'num_trades',
+                   'avg_price', 'first_price', 'last_price']
+
+    return agg
+
+
+def aggregate_ofi_by_time_window(df, time_window_minutes):
+    """Aggregate OFI data by time window for TI comparison"""
+    if df is None or len(df) == 0:
+        return None
+
+    df = df.copy()
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    tw_str = f'{time_window_minutes}min'
+    df['time_bin'] = df['timestamp'].dt.floor(tw_str)
+
+    agg = df.groupby('time_bin').agg({
+        'ofi': 'sum',
+        'mid_price': ['first', 'last']
+    }).reset_index()
+
+    agg.columns = ['timestamp', 'ofi', 'mid_price_first', 'mid_price_last']
+    agg['mid_price'] = agg['mid_price_last']
+    agg['delta_mid_price'] = agg['mid_price'].diff()
+    agg['delta_mid_price_ticks'] = agg['delta_mid_price'] / TICK_SIZE
+    agg = agg.iloc[1:].reset_index(drop=True)
+
+    return agg
+
+
+def run_ti_regression(x, y):
+    """Run OLS regression for TI comparison"""
+    if len(x) < 3:
+        return None
+
+    mask = ~(np.isnan(x) | np.isnan(y))
+    x_clean = x[mask]
+    y_clean = y[mask]
+
+    if len(x_clean) < 3:
+        return None
+
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x_clean, y_clean)
+
+    return {
+        'slope': slope,
+        'intercept': intercept,
+        'r_squared': r_value ** 2,
+        'p_value': p_value,
+        'n_obs': len(x_clean)
+    }
+
+
+def render_ti_comparison(market_config, raw_ofi_df):
+    """Render the TI vs OFI Comparison content"""
+    st.header("Trade Imbalance vs OFI Comparison")
+    st.markdown("""
+    **Cont et al. (2011) Section 3.3**: Comparing OFI with Trade Imbalance (TI).
+
+    - **OFI** = Order flow imbalance from orderbook changes
+    - **TI** = Trade Imbalance = Σ(buy_volume) - Σ(sell_volume)
+
+    The paper found OFI outperforms TI because OFI captures queue dynamics.
+    """)
+
+    # Load trades data
+    trades_file = market_config.get('trades_file')
+    if not trades_file:
+        st.warning("Trade data not configured for this market")
+        return
+
+    trades_path = DATA_DIR / trades_file
+    if not trades_path.exists():
+        st.warning(f"Trade data file not found: {trades_file}")
+        return
+
+    trades_df = pd.read_csv(trades_path)
+    trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'], format='mixed', utc=True)
+
+    st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} trades")
+
+    # Calculate results for all time windows
+    results = []
+
+    for tw in TIME_WINDOWS:
+        ofi_agg = aggregate_ofi_by_time_window(raw_ofi_df, tw)
+        ti_agg = aggregate_trades_by_time_window(trades_df, tw)
+
+        if ofi_agg is None or ti_agg is None:
+            continue
+
+        merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='inner')
+        merged = merged.dropna(subset=['ofi', 'trade_imbalance', 'delta_mid_price_ticks'])
+
+        if len(merged) >= 10:
+            ofi_reg = run_ti_regression(merged['ofi'].values, merged['delta_mid_price_ticks'].values)
+            ti_reg = run_ti_regression(merged['trade_imbalance'].values, merged['delta_mid_price_ticks'].values)
+            vol_reg = run_ti_regression(merged['total_volume'].values, merged['delta_mid_price_ticks'].values)
+
+            if ofi_reg and ti_reg:
+                results.append({
+                    'time_window': tw,
+                    'n_obs': ofi_reg['n_obs'],
+                    'ofi_r_squared': ofi_reg['r_squared'],
+                    'ti_r_squared': ti_reg['r_squared'],
+                    'vol_r_squared': vol_reg['r_squared'] if vol_reg else 0
+                })
+
+    if not results:
+        st.error("Not enough overlapping data for comparison")
+        return
+
+    results_df = pd.DataFrame(results)
+
+    # Create tabs
+    tabs = st.tabs(["Summary", "Charts", "Volume Analysis"])
+
+    with tabs[0]:
+        st.subheader("Summary: OFI vs Trade Imbalance")
+
+        avg_ofi_r2 = results_df['ofi_r_squared'].mean()
+        avg_ti_r2 = results_df['ti_r_squared'].mean()
+        ofi_wins = (results_df['ofi_r_squared'] > results_df['ti_r_squared']).sum()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Avg OFI R²", f"{avg_ofi_r2:.4f}")
+        with col2:
+            st.metric("Avg TI R²", f"{avg_ti_r2:.4f}")
+        with col3:
+            winner = "OFI" if avg_ofi_r2 > avg_ti_r2 else "TI"
+            st.metric("Winner", winner)
+        with col4:
+            st.metric("OFI wins", f"{ofi_wins}/{len(results_df)}")
+
+        st.markdown("---")
+        st.subheader("Results by Time Window")
+
+        display_df = results_df.copy()
+        display_df['winner'] = display_df.apply(
+            lambda r: 'OFI' if r['ofi_r_squared'] > r['ti_r_squared'] else 'TI', axis=1
+        )
+
+        st.dataframe(
+            display_df[['time_window', 'n_obs', 'ofi_r_squared', 'ti_r_squared', 'winner']].rename(columns={
+                'time_window': 'Window (min)',
+                'n_obs': 'Observations',
+                'ofi_r_squared': 'OFI R²',
+                'ti_r_squared': 'TI R²',
+                'winner': 'Winner'
+            }),
+            use_container_width=True
+        )
+
+        if avg_ofi_r2 > avg_ti_r2:
+            st.success(f"**OFI outperforms Trade Imbalance** (consistent with Cont et al. 2011)")
+        else:
+            st.warning(f"**Trade Imbalance outperforms OFI** (contrary to Cont et al. 2011)")
+
+    with tabs[1]:
+        st.subheader("R² Comparison Charts")
+
+        import plotly.graph_objects as go
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=[f"{tw} min" for tw in results_df['time_window']],
+            y=results_df['ofi_r_squared'],
+            name='OFI',
+            marker_color='#2E86AB',
+            text=[f"{r:.4f}" for r in results_df['ofi_r_squared']],
+            textposition='outside'
+        ))
+        fig.add_trace(go.Bar(
+            x=[f"{tw} min" for tw in results_df['time_window']],
+            y=results_df['ti_r_squared'],
+            name='Trade Imbalance',
+            marker_color='#06A77D',
+            text=[f"{r:.4f}" for r in results_df['ti_r_squared']],
+            textposition='outside'
+        ))
+        fig.update_layout(
+            title="R² Comparison: OFI vs Trade Imbalance",
+            xaxis_title="Time Window",
+            yaxis_title="R²",
+            barmode='group',
+            height=400
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tabs[2]:
+        st.subheader("Volume Analysis: OFI vs Raw Volume")
+        st.markdown("Comparing signed OFI with unsigned trading volume")
+
+        avg_vol_r2 = results_df['vol_r_squared'].mean()
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Avg OFI R²", f"{avg_ofi_r2:.4f}")
+        with col2:
+            st.metric("Avg Volume R²", f"{avg_vol_r2:.4f}")
+        with col3:
+            winner = "OFI" if avg_ofi_r2 > avg_vol_r2 else "Volume"
+            st.metric("Winner", winner)
+
+        if avg_ofi_r2 > avg_vol_r2:
+            st.success("**OFI outperforms raw Volume** - direction matters!")
+        else:
+            st.info("Volume performs comparably to OFI")
+
+
+# ============================================================================
 # MAIN APP
 # ============================================================================
 
@@ -935,29 +1467,15 @@ def main():
         st.header("Dashboard")
 
         # Page selector
-        page_options = ["OFI Analysis", "Depth Analysis"]
+        page_options = ["OFI Analysis", "Depth Analysis", "TI vs OFI Comparison"]
         selected_page = st.radio(
             "Select Analysis Type",
             options=page_options,
             index=0,
-            help="OFI Analysis: 243 regression analysis. Depth Analysis: Beta vs Market Depth."
+            help="OFI: 243 regressions. Depth: β vs Market Depth. TI: Trade Imbalance vs OFI."
         )
 
-        # If Depth Analysis selected, redirect with instructions
-        if selected_page == "Depth Analysis":
-            st.info("**Depth Analysis Dashboard**")
-            st.markdown("""
-            The Depth Analysis runs as a separate dashboard.
-
-            **To launch:**
-            ```bash
-            streamlit run dashboard/dashboard_depth.py
-            ```
-
-            Or use the button below (opens in new tab):
-            """)
-            st.markdown("[Open Depth Dashboard](/depth)", unsafe_allow_html=True)
-            st.divider()
+        st.divider()
 
         st.header("Market Selection")
 
@@ -1066,177 +1584,191 @@ def main():
         st.metric("Raw Snapshots", f"{len(raw_ofi_df):,}")
         st.metric("Date Range", f"{(max_date - min_date).days} days")
 
-    # Create tabs: Home + Last Day + 9 time windows
-    tab_names = ["Home", "Last Day"] + [f"{t} min" for t in TIME_WINDOWS]
-    tabs = st.tabs(tab_names)
+    # ========================================================================
+    # CONDITIONAL RENDERING BASED ON SELECTED PAGE
+    # ========================================================================
 
-    # Home tab - Price & Depth analysis + Master Summary
-    with tabs[0]:
-        st.subheader("Price & Market Overview")
-        st.markdown("Overview of price evolution, spread, and order book depth")
+    if selected_page == "Depth Analysis":
+        # Render Depth Analysis content
+        render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime)
 
-        # Aggregate with default 10min window for overview
-        overview_df = aggregate_ofi_data(raw_ofi_df.copy(), '10min')
-        filtered_overview = filter_by_date(overview_df, start_datetime, end_datetime)
+    elif selected_page == "TI vs OFI Comparison":
+        # Render TI Comparison content
+        render_ti_comparison(market_config, raw_ofi_df)
 
-        if filtered_overview is not None and len(filtered_overview) > 0:
-            st.info(f"Showing {len(filtered_overview):,} intervals (10-min aggregation)")
+    else:
+        # Default: OFI Analysis
+        # Create tabs: Home + Last Day + 9 time windows
+        tab_names = ["Home", "Last Day"] + [f"{t} min" for t in TIME_WINDOWS]
+        tabs = st.tabs(tab_names)
 
-            # Price Evolution
-            st.subheader("Price Evolution")
-            fig_price = plot_price_evolution(filtered_overview)
-            st.plotly_chart(fig_price, use_container_width=True)
+        # Home tab - Price & Depth analysis + Master Summary
+        with tabs[0]:
+            st.subheader("Price & Market Overview")
+            st.markdown("Overview of price evolution, spread, and order book depth")
 
-            col1, col2 = st.columns(2)
+            # Aggregate with default 10min window for overview
+            overview_df = aggregate_ofi_data(raw_ofi_df.copy(), '10min')
+            filtered_overview = filter_by_date(overview_df, start_datetime, end_datetime)
 
-            with col1:
-                st.subheader("Spread Analysis")
-                fig_spread = plot_spread_analysis(filtered_overview)
-                st.plotly_chart(fig_spread, use_container_width=True)
+            if filtered_overview is not None and len(filtered_overview) > 0:
+                st.info(f"Showing {len(filtered_overview):,} intervals (10-min aggregation)")
 
-            with col2:
-                st.subheader("Order Book Depth")
-                fig_depth = plot_depth_evolution(filtered_overview)
-                st.plotly_chart(fig_depth, use_container_width=True)
+                # Price Evolution
+                st.subheader("Price Evolution")
+                fig_price = plot_price_evolution(filtered_overview)
+                st.plotly_chart(fig_price, use_container_width=True)
 
-            # OFI Distribution
-            st.subheader("OFI Distribution")
-            fig_ofi_dist = plot_ofi_distribution(filtered_overview)
-            st.plotly_chart(fig_ofi_dist, use_container_width=True)
-        else:
-            st.warning("No data available for overview")
+                col1, col2 = st.columns(2)
 
-        # Master Summary Section (in Home tab)
-        st.markdown("---")
-        st.markdown("# Master Summary: All Time Windows x All Methods")
-        st.markdown("*Collecting data from all 9 time windows...*")
+                with col1:
+                    st.subheader("Spread Analysis")
+                    fig_spread = plot_spread_analysis(filtered_overview)
+                    st.plotly_chart(fig_spread, use_container_width=True)
 
-        # Collect all summary data from all time windows
-        all_summary_data = []
-        with st.spinner("Calculating 243 regressions across all time windows..."):
-            for tw in TIME_WINDOWS:
-                time_window_str = f'{tw}min'
-                aggregated_df = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
-                filtered_ofi = filter_by_date(aggregated_df, start_datetime, end_datetime)
+                with col2:
+                    st.subheader("Order Book Depth")
+                    fig_depth = plot_depth_evolution(filtered_overview)
+                    st.plotly_chart(fig_depth, use_container_width=True)
 
-                if filtered_ofi is None or len(filtered_ofi) == 0:
-                    continue
+                # OFI Distribution
+                st.subheader("OFI Distribution")
+                fig_ofi_dist = plot_ofi_distribution(filtered_overview)
+                st.plotly_chart(fig_ofi_dist, use_container_width=True)
+            else:
+                st.warning("No data available for overview")
 
-                outlier_methods = get_outlier_methods(filtered_ofi)
-                dep_var = get_dependent_variable_name()
+            # Master Summary Section (in Home tab)
+            st.markdown("---")
+            st.markdown("# Master Summary: All Time Windows x All Methods")
+            st.markdown("*Collecting data from all 9 time windows...*")
 
-                for method_name, method_df in outlier_methods.items():
-                    df_clean = method_df.dropna(subset=['ofi', dep_var]).copy()
-                    if len(df_clean) < 150:
+            # Collect all summary data from all time windows
+            all_summary_data = []
+            with st.spinner("Calculating 243 regressions across all time windows..."):
+                for tw in TIME_WINDOWS:
+                    time_window_str = f'{tw}min'
+                    aggregated_df = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
+                    filtered_ofi = filter_by_date(aggregated_df, start_datetime, end_datetime)
+
+                    if filtered_ofi is None or len(filtered_ofi) == 0:
                         continue
 
-                    # Use the chosen split method
-                    phases_dict = split_into_phases(df_clean, split_method)
-                    # Rename keys to short form
-                    phases = {
-                        'P1 (Early)': phases_dict['Phase 1 (Early)'],
-                        'P2 (Middle)': phases_dict['Phase 2 (Middle)'],
-                        'P3 (Near Expiry)': phases_dict['Phase 3 (Near Expiry)']
-                    }
+                    outlier_methods = get_outlier_methods(filtered_ofi)
+                    dep_var = get_dependent_variable_name()
 
-                    from scipy import stats
-                    for phase_name, phase_df in phases.items():
-                        if len(phase_df) > 2:
-                            slope, intercept, r_value, p_value, std_err = stats.linregress(
-                                phase_df['ofi'], phase_df[dep_var]
-                            )
-                            short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
-                            all_summary_data.append({
-                                'TimeWindow': tw,
-                                'Method': short_name,
-                                'Phase': phase_name,
-                                'N': len(phase_df),
-                                'Beta': slope,
-                                'R2': r_value**2,
-                                'p-value': p_value
-                            })
+                    for method_name, method_df in outlier_methods.items():
+                        df_clean = method_df.dropna(subset=['ofi', dep_var]).copy()
+                        if len(df_clean) < 150:
+                            continue
 
-        if all_summary_data:
-            master_df = pd.DataFrame(all_summary_data)
+                        # Use the chosen split method
+                        phases_dict = split_into_phases(df_clean, split_method)
+                        # Rename keys to short form
+                        phases = {
+                            'P1 (Early)': phases_dict['Phase 1 (Early)'],
+                            'P2 (Middle)': phases_dict['Phase 2 (Middle)'],
+                            'P3 (Near Expiry)': phases_dict['Phase 3 (Near Expiry)']
+                        }
 
-            # Table 1: Average R² across all phases
-            st.markdown("### 1. Average R² Across All Phases")
-            avg_r2_by_tw_method = master_df.groupby(['TimeWindow', 'Method'])['R2'].mean().reset_index()
-            pivot_avg = avg_r2_by_tw_method.pivot(index='TimeWindow', columns='Method', values='R2')
-            st.dataframe(
-                pivot_avg.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
-                use_container_width=True,
-                height=380
-            )
+                        from scipy import stats
+                        for phase_name, phase_df in phases.items():
+                            if len(phase_df) > 2:
+                                slope, intercept, r_value, p_value, std_err = stats.linregress(
+                                    phase_df['ofi'], phase_df[dep_var]
+                                )
+                                short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
+                                all_summary_data.append({
+                                    'TimeWindow': tw,
+                                    'Method': short_name,
+                                    'Phase': phase_name,
+                                    'N': len(phase_df),
+                                    'Beta': slope,
+                                    'R2': r_value**2,
+                                    'p-value': p_value
+                                })
 
-            # Find best overall
-            best_idx = avg_r2_by_tw_method['R2'].idxmax()
-            best_row = avg_r2_by_tw_method.loc[best_idx]
-            st.success(f"**Best Overall**: {best_row['TimeWindow']} min + {best_row['Method']} (Avg R² = {best_row['R2']:.4f})")
+            if all_summary_data:
+                master_df = pd.DataFrame(all_summary_data)
 
-            # Table 2: Phase 1 (Early) only
-            st.markdown("### 2. Phase 1 (Early Market) R²")
-            p1_data = master_df[master_df['Phase'] == 'P1 (Early)']
-            if len(p1_data) > 0:
-                pivot_p1 = p1_data.pivot(index='TimeWindow', columns='Method', values='R2')
+                # Table 1: Average R² across all phases
+                st.markdown("### 1. Average R² Across All Phases")
+                avg_r2_by_tw_method = master_df.groupby(['TimeWindow', 'Method'])['R2'].mean().reset_index()
+                pivot_avg = avg_r2_by_tw_method.pivot(index='TimeWindow', columns='Method', values='R2')
                 st.dataframe(
-                    pivot_p1.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+                    pivot_avg.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
                     use_container_width=True,
                     height=380
                 )
-                best_p1 = p1_data.loc[p1_data['R2'].idxmax()]
-                st.info(f"**Best Phase 1**: {best_p1['TimeWindow']} min + {best_p1['Method']} (R² = {best_p1['R2']:.4f})")
 
-            # Table 3: Phase 2 (Middle) only
-            st.markdown("### 3. Phase 2 (Middle Market) R²")
-            p2_data = master_df[master_df['Phase'] == 'P2 (Middle)']
-            if len(p2_data) > 0:
-                pivot_p2 = p2_data.pivot(index='TimeWindow', columns='Method', values='R2')
-                st.dataframe(
-                    pivot_p2.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
-                    use_container_width=True,
-                    height=380
+                # Find best overall
+                best_idx = avg_r2_by_tw_method['R2'].idxmax()
+                best_row = avg_r2_by_tw_method.loc[best_idx]
+                st.success(f"**Best Overall**: {best_row['TimeWindow']} min + {best_row['Method']} (Avg R² = {best_row['R2']:.4f})")
+
+                # Table 2: Phase 1 (Early) only
+                st.markdown("### 2. Phase 1 (Early Market) R²")
+                p1_data = master_df[master_df['Phase'] == 'P1 (Early)']
+                if len(p1_data) > 0:
+                    pivot_p1 = p1_data.pivot(index='TimeWindow', columns='Method', values='R2')
+                    st.dataframe(
+                        pivot_p1.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+                        use_container_width=True,
+                        height=380
+                    )
+                    best_p1 = p1_data.loc[p1_data['R2'].idxmax()]
+                    st.info(f"**Best Phase 1**: {best_p1['TimeWindow']} min + {best_p1['Method']} (R² = {best_p1['R2']:.4f})")
+
+                # Table 3: Phase 2 (Middle) only
+                st.markdown("### 3. Phase 2 (Middle Market) R²")
+                p2_data = master_df[master_df['Phase'] == 'P2 (Middle)']
+                if len(p2_data) > 0:
+                    pivot_p2 = p2_data.pivot(index='TimeWindow', columns='Method', values='R2')
+                    st.dataframe(
+                        pivot_p2.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+                        use_container_width=True,
+                        height=380
+                    )
+                    best_p2 = p2_data.loc[p2_data['R2'].idxmax()]
+                    st.info(f"**Best Phase 2**: {best_p2['TimeWindow']} min + {best_p2['Method']} (R² = {best_p2['R2']:.4f})")
+
+                # Table 4: Phase 3 (Near Expiry) only
+                st.markdown("### 4. Phase 3 (Near Expiry) R²")
+                p3_data = master_df[master_df['Phase'] == 'P3 (Near Expiry)']
+                if len(p3_data) > 0:
+                    pivot_p3 = p3_data.pivot(index='TimeWindow', columns='Method', values='R2')
+                    st.dataframe(
+                        pivot_p3.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+                        use_container_width=True,
+                        height=380
+                    )
+                    best_p3 = p3_data.loc[p3_data['R2'].idxmax()]
+                    st.info(f"**Best Phase 3**: {best_p3['TimeWindow']} min + {best_p3['Method']} (R² = {best_p3['R2']:.4f})")
+
+                # Download full results
+                st.markdown("### Download Full Results")
+                csv = master_df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="ofi_multi_time_analysis.csv",
+                    mime="text/csv"
                 )
-                best_p2 = p2_data.loc[p2_data['R2'].idxmax()]
-                st.info(f"**Best Phase 2**: {best_p2['TimeWindow']} min + {best_p2['Method']} (R² = {best_p2['R2']:.4f})")
+            else:
+                st.warning("No data available for summary")
 
-            # Table 4: Phase 3 (Near Expiry) only
-            st.markdown("### 4. Phase 3 (Near Expiry) R²")
-            p3_data = master_df[master_df['Phase'] == 'P3 (Near Expiry)']
-            if len(p3_data) > 0:
-                pivot_p3 = p3_data.pivot(index='TimeWindow', columns='Method', values='R2')
-                st.dataframe(
-                    pivot_p3.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
-                    use_container_width=True,
-                    height=380
-                )
-                best_p3 = p3_data.loc[p3_data['R2'].idxmax()]
-                st.info(f"**Best Phase 3**: {best_p3['TimeWindow']} min + {best_p3['Method']} (R² = {best_p3['R2']:.4f})")
+        # Last Day tab (tabs[1])
+        with tabs[1]:
+            render_last_day_analysis(raw_ofi_df)
 
-            # Download full results
-            st.markdown("### Download Full Results")
-            csv = master_df.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name="ofi_multi_time_analysis.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("No data available for summary")
+        # Time window tabs (tabs[2] through tabs[10])
+        for i, tw in enumerate(TIME_WINDOWS):
+            with tabs[i + 2]:  # +2 because tabs[0] is Home, tabs[1] is Last Day
+                st.subheader(f"Time Window: {tw} Minutes")
+                st.markdown(f"Aggregating OFI data into {tw}-minute intervals, then applying 9 outlier methods")
 
-    # Last Day tab (tabs[1])
-    with tabs[1]:
-        render_last_day_analysis(raw_ofi_df)
-
-    # Time window tabs (tabs[2] through tabs[10])
-    for i, tw in enumerate(TIME_WINDOWS):
-        with tabs[i + 2]:  # +2 because tabs[0] is Home, tabs[1] is Last Day
-            st.subheader(f"Time Window: {tw} Minutes")
-            st.markdown(f"Aggregating OFI data into {tw}-minute intervals, then applying 9 outlier methods")
-
-            # Render analysis for this time window
-            render_time_window_analysis(raw_ofi_df, tw, start_datetime, end_datetime, split_method)
+                # Render analysis for this time window
+                render_time_window_analysis(raw_ofi_df, tw, start_datetime, end_datetime, split_method)
 
 
 if __name__ == "__main__":
