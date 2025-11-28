@@ -1,6 +1,6 @@
 # OFI Analysis Dashboard
 
-Simple dashboard for exploring Polymarket Order Flow Imbalance (OFI) data.
+Comprehensive dashboard for exploring Polymarket Order Flow Imbalance (OFI) data with multi-time-window analysis.
 
 ## Quick Start
 
@@ -12,21 +12,29 @@ Dashboard opens at **http://localhost:8501**
 
 ## What It Does
 
+- **243 regression analyses**: 9 time windows × 9 outlier methods × 3 phases
 - Explore pre-downloaded OFI data for prediction markets
-- Interactive charts showing price, OFI, and order book depth
+- Interactive scatter plots with regression statistics
 - Filter by date/time ranges
-- Real-time 10-minute data aggregation (per Cont et al. 2011 methodology)
+- Configurable time aggregation (1, 5, 10, 15, 20, 30, 45, 60, 90 minutes)
 
 ## Dashboard Features
 
 ### Tabs:
-1. **📈 Price & Depth** - Price evolution, bid-ask spreads, order book depth
-2. **📊 OFI Analysis** - OFI vs price change scatter plots with regression statistics
+1. **Home** - Price evolution, spreads, order book depth, and master R² summary heatmaps
+2. **Last Day** - 81 scatter plots analyzing the final 24 hours before market expiry
+3. **1 min - 90 min** - 9 tabs showing OFI analysis for each time aggregation window
+
+### Analysis Features:
+- **9 Outlier Handling Methods**: Raw, IQR, Percentile (1%-99%), Z-Score, Winsorized, Absolute Threshold (±200k, ±100k), MAD, Percentile (5%-95%)
+- **3-Phase Analysis**: Early, Middle, Near Expiry market phases
+- **Phase Split Options**: By observation count or by calendar time
 
 ### Controls (Sidebar):
-- Market selection dropdown
+- Market selection dropdown (NYC Mayor, Fed Rate Decision)
+- Phase split method toggle
 - Date/time filters (UTC)
-- Data aggregation info
+- Data info metrics
 
 ## Input Methods (For Adding New Markets)
 
