@@ -619,6 +619,190 @@ def plot_ofi_distribution(df):
 TIME_WINDOWS = [1, 5, 10, 15, 20, 30, 45, 60, 90]
 
 
+def filter_last_day(df):
+    """Filter dataframe to only include the last 24 hours of data"""
+    if df is None or len(df) == 0:
+        return df
+    max_time = df['timestamp'].max()
+    cutoff = max_time - pd.Timedelta(days=1)
+    return df[df['timestamp'] >= cutoff].copy()
+
+
+def plot_single_regression(df, title):
+    """Create a single OFI vs price change scatter with regression line"""
+    from scipy import stats
+
+    dep_var = get_dependent_variable_name()
+    dep_var_label = get_dependent_variable_label()
+    df_clean = df.dropna(subset=['ofi', dep_var])
+
+    fig = go.Figure()
+
+    if len(df_clean) == 0:
+        fig.update_layout(
+            title=dict(text=f"{title} (No data)", font=dict(size=11)),
+            height=250,
+            margin=dict(l=40, r=20, t=40, b=40)
+        )
+        return fig, None
+
+    # Scatter points
+    fig.add_trace(go.Scatter(
+        x=df_clean['ofi'],
+        y=df_clean[dep_var],
+        mode='markers',
+        marker=dict(size=4, opacity=0.5, color='#2E86AB'),
+        hovertemplate=f'<b>OFI:</b> %{{x:.2f}}<br><b>{dep_var_label}:</b> %{{y:.3f}}<extra></extra>'
+    ))
+
+    result = None
+    # Regression line
+    if len(df_clean) > 2:
+        slope, intercept, r_value, p_value, std_err = stats.linregress(
+            df_clean['ofi'], df_clean[dep_var]
+        )
+        x_range = [df_clean['ofi'].min(), df_clean['ofi'].max()]
+        y_pred = [slope * x + intercept for x in x_range]
+
+        fig.add_trace(go.Scatter(
+            x=x_range, y=y_pred,
+            mode='lines',
+            line=dict(color='red', width=2)
+        ))
+
+        # Add stats annotation
+        fig.add_annotation(
+            text=f"R²={r_value**2:.3f}<br>β={slope:.2e}",
+            xref="paper", yref="paper",
+            x=0.95, y=0.95,
+            showarrow=False,
+            bgcolor='black',
+            font=dict(color='white', size=9),
+            xanchor='right',
+            yanchor='top'
+        )
+
+        result = {
+            'N': len(df_clean),
+            'Beta': slope,
+            'R2': r_value**2,
+            'p-value': p_value
+        }
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=11)),
+        height=250,
+        margin=dict(l=40, r=20, t=40, b=40),
+        showlegend=False,
+        xaxis_title="OFI",
+        yaxis_title=dep_var_label
+    )
+
+    return fig, result
+
+
+def render_last_day_analysis(raw_ofi_df):
+    """
+    Render 81 scatter plots for last day analysis.
+    Layout: 9 time windows, each showing 9 outlier methods in 3x3 grid.
+    """
+    from scipy import stats
+
+    st.subheader("Last Day Analysis (Final 24 Hours Before Expiry)")
+    st.markdown("Analyzing OFI-price relationships in the final day when trading intensifies")
+
+    # Filter to last day
+    last_day_df = filter_last_day(raw_ofi_df)
+
+    if last_day_df is None or len(last_day_df) == 0:
+        st.warning("No data available for last day analysis")
+        return
+
+    st.info(f"Last day data: {len(last_day_df):,} raw snapshots")
+
+    # Collect all results for summary heatmap
+    all_results = []
+    dep_var = get_dependent_variable_name()
+
+    # First, compute all regressions for summary
+    with st.spinner("Computing 81 regressions for last day..."):
+        for tw in TIME_WINDOWS:
+            time_window_str = f'{tw}min'
+            aggregated = aggregate_ofi_data(last_day_df.copy(), time_window_str)
+
+            if aggregated is None or len(aggregated) == 0:
+                continue
+
+            outlier_methods = get_outlier_methods(aggregated)
+
+            for method_name, method_df in outlier_methods.items():
+                df_clean = method_df.dropna(subset=['ofi', dep_var])
+                if len(df_clean) > 2:
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(
+                        df_clean['ofi'], df_clean[dep_var]
+                    )
+                    short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
+                    all_results.append({
+                        'TimeWindow': tw,
+                        'Method': short_name,
+                        'N': len(df_clean),
+                        'Beta': slope,
+                        'R2': r_value**2,
+                        'p-value': p_value
+                    })
+
+    # Show summary heatmap at top
+    if all_results:
+        st.markdown("### Summary: R² Heatmap (Last Day)")
+        results_df = pd.DataFrame(all_results)
+        pivot_r2 = results_df.pivot(index='TimeWindow', columns='Method', values='R2')
+        st.dataframe(
+            pivot_r2.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+            use_container_width=True,
+            height=380
+        )
+
+        # Find best combination
+        best_idx = results_df['R2'].idxmax()
+        best_row = results_df.loc[best_idx]
+        st.success(f"**Best Last Day**: {best_row['TimeWindow']} min + {best_row['Method']} (R² = {best_row['R2']:.4f})")
+
+    st.markdown("---")
+    st.markdown("### Detailed Scatter Plots (81 Total)")
+
+    # Now show all 81 scatter plots organized by time window
+    for tw in TIME_WINDOWS:
+        st.markdown(f"#### {tw} Minute Aggregation")
+
+        time_window_str = f'{tw}min'
+        aggregated = aggregate_ofi_data(last_day_df.copy(), time_window_str)
+
+        if aggregated is None or len(aggregated) == 0:
+            st.warning(f"No data for {tw} min window")
+            continue
+
+        st.caption(f"{len(aggregated)} intervals")
+
+        outlier_methods = get_outlier_methods(aggregated)
+        method_names = list(outlier_methods.keys())
+
+        # Create 3x3 grid
+        for row_idx in range(3):
+            cols = st.columns(3)
+            for col_idx in range(3):
+                method_idx = row_idx * 3 + col_idx
+                if method_idx < len(method_names):
+                    method_name = method_names[method_idx]
+                    method_df = outlier_methods[method_name]
+                    short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
+
+                    with cols[col_idx]:
+                        fig, _ = plot_single_regression(method_df, short_name)
+                        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+
+
 def get_outlier_methods(df):
     """Return dictionary of all outlier filtering methods applied to df"""
     return {
@@ -855,8 +1039,8 @@ def main():
         st.metric("Raw Snapshots", f"{len(raw_ofi_df):,}")
         st.metric("Date Range", f"{(max_date - min_date).days} days")
 
-    # Create tabs: Home + 9 time windows
-    tab_names = ["Home"] + [f"{t} min" for t in TIME_WINDOWS]
+    # Create tabs: Home + Last Day + 9 time windows
+    tab_names = ["Home", "Last Day"] + [f"{t} min" for t in TIME_WINDOWS]
     tabs = st.tabs(tab_names)
 
     # Home tab - Price & Depth analysis + Master Summary
@@ -1014,9 +1198,13 @@ def main():
         else:
             st.warning("No data available for summary")
 
-    # Time window tabs (tabs[1] through tabs[9])
+    # Last Day tab (tabs[1])
+    with tabs[1]:
+        render_last_day_analysis(raw_ofi_df)
+
+    # Time window tabs (tabs[2] through tabs[10])
     for i, tw in enumerate(TIME_WINDOWS):
-        with tabs[i + 1]:  # +1 because tabs[0] is Home
+        with tabs[i + 2]:  # +2 because tabs[0] is Home, tabs[1] is Last Day
             st.subheader(f"Time Window: {tw} Minutes")
             st.markdown(f"Aggregating OFI data into {tw}-minute intervals, then applying 9 outlier methods")
 
