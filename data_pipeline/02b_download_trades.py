@@ -83,6 +83,32 @@ def load_token_id():
     return token_id, market_info
 
 
+def make_request_with_retry(url, headers, params, max_retries=5):
+    """Make API request with exponential backoff retry for rate limiting"""
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+
+            # Handle rate limiting with exponential backoff
+            if response.status_code == 429:
+                wait_time = (2 ** attempt) * 5  # 5, 10, 20, 40, 80 seconds
+                print(f"\n⚠️  Rate limited (429). Waiting {wait_time}s before retry {attempt+1}/{max_retries}...")
+                time.sleep(wait_time)
+                continue
+
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            wait_time = (2 ** attempt) * 2
+            print(f"\n❌ API error: {e}")
+            if attempt < max_retries - 1:
+                print(f"   Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+
+    return None  # All retries failed
+
+
 def download_trades_day(token_id, date, api_key):
     """
     Download all trades for a single day
@@ -121,35 +147,31 @@ def download_trades_day(token_id, date, api_key):
             'offset': offset
         }
 
-        try:
-            response = requests.get(
-                f"{DOME_API_BASE_URL}/polymarket/orders",
-                headers=headers,
-                params=params,
-                timeout=30
-            )
-            response.raise_for_status()
-            data = response.json()
+        data = make_request_with_retry(
+            f"{DOME_API_BASE_URL}/polymarket/orders",
+            headers,
+            params
+        )
 
-            orders = data.get('orders', [])
-            if not orders:
-                break  # No more data
-
-            all_trades.extend(orders)
-
-            # Check pagination
-            pagination = data.get('pagination', {})
-            has_more = pagination.get('has_more', False)
-
-            if not has_more:
-                break
-
-            offset += limit
-            time.sleep(0.1)  # Rate limiting
-
-        except requests.exceptions.RequestException as e:
-            print(f"\n❌ API error: {e}")
+        if data is None:
+            print(f"\n❌ Max retries reached, stopping for this day")
             break
+
+        orders = data.get('orders', [])
+        if not orders:
+            break  # No more data
+
+        all_trades.extend(orders)
+
+        # Check pagination
+        pagination = data.get('pagination', {})
+        has_more = pagination.get('has_more', False)
+
+        if not has_more:
+            break
+
+        offset += limit
+        time.sleep(1.0)  # Rate limiting between pagination requests
 
     return all_trades
 
@@ -187,6 +209,7 @@ def download_all_trades(token_id, start_date, end_date, api_key):
 
         current_date += timedelta(days=1)
         pbar.update(1)
+        time.sleep(2.0)  # Delay between days to avoid rate limiting
 
     pbar.close()
     return all_trades

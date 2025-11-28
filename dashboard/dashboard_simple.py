@@ -930,8 +930,35 @@ def main():
     dep_var_label = get_dependent_variable_label()
     st.caption(f"Price Units: {dep_var_label}")
 
-    # Sidebar - Market Selection and Date/Time Filter
+    # Sidebar - Page Selection, Market Selection and Date/Time Filter
     with st.sidebar:
+        st.header("Dashboard")
+
+        # Page selector
+        page_options = ["OFI Analysis", "Depth Analysis"]
+        selected_page = st.radio(
+            "Select Analysis Type",
+            options=page_options,
+            index=0,
+            help="OFI Analysis: 243 regression analysis. Depth Analysis: Beta vs Market Depth."
+        )
+
+        # If Depth Analysis selected, redirect with instructions
+        if selected_page == "Depth Analysis":
+            st.info("**Depth Analysis Dashboard**")
+            st.markdown("""
+            The Depth Analysis runs as a separate dashboard.
+
+            **To launch:**
+            ```bash
+            streamlit run dashboard/dashboard_depth.py
+            ```
+
+            Or use the button below (opens in new tab):
+            """)
+            st.markdown("[Open Depth Dashboard](/depth)", unsafe_allow_html=True)
+            st.divider()
+
         st.header("Market Selection")
 
         # Market dropdown - default to NYC
