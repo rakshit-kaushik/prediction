@@ -1289,7 +1289,13 @@ def run_ti_regression(x, y):
 
 
 def render_ti_comparison(market_config, raw_ofi_df):
-    """Render the TI vs OFI Comparison content"""
+    """Render the TI vs OFI Comparison content
+
+    Configuration:
+    - Time Window: 45 minutes (fixed)
+    - Outlier Method: Z-Score (3σ)
+    - Phases: Early, Middle, Near Expiry
+    """
     st.header("Trade Imbalance vs OFI Comparison")
     st.markdown("""
     **Cont et al. (2011) Section 3.3**: Comparing OFI with Trade Imbalance (TI).
@@ -1299,6 +1305,8 @@ def render_ti_comparison(market_config, raw_ofi_df):
 
     The paper found OFI outperforms TI because OFI captures queue dynamics.
     """)
+
+    st.info("**Configuration:** 45-min time window | Z-Score (3σ) outlier removal | 3 phases")
 
     # Load trades data
     trades_file = market_config.get('trades_file')
@@ -1316,134 +1324,155 @@ def render_ti_comparison(market_config, raw_ofi_df):
 
     st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} trades")
 
-    # Calculate results for all time windows
+    # Fixed configuration
+    TIME_WINDOW = 45  # minutes
+
+    # Aggregate OFI data with 45-min window
+    ofi_agg = aggregate_ofi_by_time_window(raw_ofi_df, TIME_WINDOW)
+    ti_agg = aggregate_trades_by_time_window(trades_df, TIME_WINDOW)
+
+    if ofi_agg is None or ti_agg is None:
+        st.error("Could not aggregate data")
+        return
+
+    # Merge OFI and TI data
+    merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='inner')
+    merged = merged.dropna(subset=['ofi', 'trade_imbalance', 'delta_mid_price_ticks'])
+
+    if len(merged) < 30:
+        st.error(f"Not enough data after merge: {len(merged)} observations")
+        return
+
+    # Apply Z-score outlier filtering to OFI
+    mean_ofi = merged['ofi'].mean()
+    std_ofi = merged['ofi'].std()
+    if std_ofi > 0:
+        z_scores = (merged['ofi'] - mean_ofi) / std_ofi
+        merged = merged[z_scores.abs() <= 3].copy()
+
+    st.caption(f"After Z-score filtering: {len(merged)} observations")
+
+    # Split into 3 phases
+    n = len(merged)
+    phase_size = n // 3
+
+    phases = {
+        'Early': merged.iloc[:phase_size].copy(),
+        'Middle': merged.iloc[phase_size:2*phase_size].copy(),
+        'Near Expiry': merged.iloc[2*phase_size:].copy()
+    }
+
+    # Calculate R² for each phase
     results = []
-
-    for tw in TIME_WINDOWS:
-        ofi_agg = aggregate_ofi_by_time_window(raw_ofi_df, tw)
-        ti_agg = aggregate_trades_by_time_window(trades_df, tw)
-
-        if ofi_agg is None or ti_agg is None:
+    for phase_name, phase_df in phases.items():
+        if len(phase_df) < 10:
             continue
 
-        merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='inner')
-        merged = merged.dropna(subset=['ofi', 'trade_imbalance', 'delta_mid_price_ticks'])
+        ofi_reg = run_ti_regression(phase_df['ofi'].values, phase_df['delta_mid_price_ticks'].values)
+        ti_reg = run_ti_regression(phase_df['trade_imbalance'].values, phase_df['delta_mid_price_ticks'].values)
+        vol_reg = run_ti_regression(phase_df['total_volume'].values, phase_df['delta_mid_price_ticks'].values)
 
-        if len(merged) >= 10:
-            ofi_reg = run_ti_regression(merged['ofi'].values, merged['delta_mid_price_ticks'].values)
-            ti_reg = run_ti_regression(merged['trade_imbalance'].values, merged['delta_mid_price_ticks'].values)
-            vol_reg = run_ti_regression(merged['total_volume'].values, merged['delta_mid_price_ticks'].values)
-
-            if ofi_reg and ti_reg:
-                results.append({
-                    'time_window': tw,
-                    'n_obs': ofi_reg['n_obs'],
-                    'ofi_r_squared': ofi_reg['r_squared'],
-                    'ti_r_squared': ti_reg['r_squared'],
-                    'vol_r_squared': vol_reg['r_squared'] if vol_reg else 0
-                })
+        if ofi_reg and ti_reg:
+            results.append({
+                'Phase': phase_name,
+                'N': len(phase_df),
+                'OFI R²': ofi_reg['r_squared'],
+                'TI R²': ti_reg['r_squared'],
+                'Volume R²': vol_reg['r_squared'] if vol_reg else 0,
+                'Winner': 'OFI' if ofi_reg['r_squared'] > ti_reg['r_squared'] else 'TI'
+            })
 
     if not results:
-        st.error("Not enough overlapping data for comparison")
+        st.error("Not enough data for phase comparison")
         return
 
     results_df = pd.DataFrame(results)
 
-    # Create tabs
-    tabs = st.tabs(["Summary", "Charts", "Volume Analysis"])
+    # Summary metrics
+    st.subheader("Results by Phase")
 
-    with tabs[0]:
-        st.subheader("Summary: OFI vs Trade Imbalance")
+    # Display results table
+    st.dataframe(
+        results_df.style.format({
+            'OFI R²': '{:.4f}',
+            'TI R²': '{:.4f}',
+            'Volume R²': '{:.4f}'
+        }).apply(lambda x: ['background-color: #d4edda' if v == 'OFI' else 'background-color: #f8d7da'
+                           for v in x] if x.name == 'Winner' else [''] * len(x), axis=0),
+        use_container_width=True
+    )
 
-        avg_ofi_r2 = results_df['ofi_r_squared'].mean()
-        avg_ti_r2 = results_df['ti_r_squared'].mean()
-        ofi_wins = (results_df['ofi_r_squared'] > results_df['ti_r_squared']).sum()
+    # Summary statistics
+    st.markdown("---")
+    st.subheader("Summary")
 
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Avg OFI R²", f"{avg_ofi_r2:.4f}")
-        with col2:
-            st.metric("Avg TI R²", f"{avg_ti_r2:.4f}")
-        with col3:
-            winner = "OFI" if avg_ofi_r2 > avg_ti_r2 else "TI"
-            st.metric("Winner", winner)
-        with col4:
-            st.metric("OFI wins", f"{ofi_wins}/{len(results_df)}")
+    ofi_wins = (results_df['Winner'] == 'OFI').sum()
+    ti_wins = (results_df['Winner'] == 'TI').sum()
+    avg_ofi_r2 = results_df['OFI R²'].mean()
+    avg_ti_r2 = results_df['TI R²'].mean()
+    avg_vol_r2 = results_df['Volume R²'].mean()
 
-        st.markdown("---")
-        st.subheader("Results by Time Window")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Avg OFI R²", f"{avg_ofi_r2:.4f}")
+    with col2:
+        st.metric("Avg TI R²", f"{avg_ti_r2:.4f}")
+    with col3:
+        st.metric("Avg Volume R²", f"{avg_vol_r2:.4f}")
+    with col4:
+        st.metric("OFI wins", f"{ofi_wins}/{len(results_df)} phases")
 
-        display_df = results_df.copy()
-        display_df['winner'] = display_df.apply(
-            lambda r: 'OFI' if r['ofi_r_squared'] > r['ti_r_squared'] else 'TI', axis=1
-        )
+    # Conclusion
+    st.markdown("---")
+    if avg_ofi_r2 > avg_ti_r2:
+        st.success(f"**OFI outperforms Trade Imbalance** (consistent with Cont et al. 2011)")
+    else:
+        st.warning(f"**Trade Imbalance outperforms OFI** (contrary to Cont et al. 2011)")
 
-        st.dataframe(
-            display_df[['time_window', 'n_obs', 'ofi_r_squared', 'ti_r_squared', 'winner']].rename(columns={
-                'time_window': 'Window (min)',
-                'n_obs': 'Observations',
-                'ofi_r_squared': 'OFI R²',
-                'ti_r_squared': 'TI R²',
-                'winner': 'Winner'
-            }),
-            use_container_width=True
-        )
+    if avg_ofi_r2 > avg_vol_r2:
+        st.success("**OFI outperforms raw Volume** - direction matters!")
+    else:
+        st.info("Volume performs comparably to OFI")
 
-        if avg_ofi_r2 > avg_ti_r2:
-            st.success(f"**OFI outperforms Trade Imbalance** (consistent with Cont et al. 2011)")
-        else:
-            st.warning(f"**Trade Imbalance outperforms OFI** (contrary to Cont et al. 2011)")
+    # Chart
+    st.markdown("---")
+    st.subheader("R² by Phase")
 
-    with tabs[1]:
-        st.subheader("R² Comparison Charts")
+    import plotly.graph_objects as go
 
-        import plotly.graph_objects as go
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=[f"{tw} min" for tw in results_df['time_window']],
-            y=results_df['ofi_r_squared'],
-            name='OFI',
-            marker_color='#2E86AB',
-            text=[f"{r:.4f}" for r in results_df['ofi_r_squared']],
-            textposition='outside'
-        ))
-        fig.add_trace(go.Bar(
-            x=[f"{tw} min" for tw in results_df['time_window']],
-            y=results_df['ti_r_squared'],
-            name='Trade Imbalance',
-            marker_color='#06A77D',
-            text=[f"{r:.4f}" for r in results_df['ti_r_squared']],
-            textposition='outside'
-        ))
-        fig.update_layout(
-            title="R² Comparison: OFI vs Trade Imbalance",
-            xaxis_title="Time Window",
-            yaxis_title="R²",
-            barmode='group',
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tabs[2]:
-        st.subheader("Volume Analysis: OFI vs Raw Volume")
-        st.markdown("Comparing signed OFI with unsigned trading volume")
-
-        avg_vol_r2 = results_df['vol_r_squared'].mean()
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Avg OFI R²", f"{avg_ofi_r2:.4f}")
-        with col2:
-            st.metric("Avg Volume R²", f"{avg_vol_r2:.4f}")
-        with col3:
-            winner = "OFI" if avg_ofi_r2 > avg_vol_r2 else "Volume"
-            st.metric("Winner", winner)
-
-        if avg_ofi_r2 > avg_vol_r2:
-            st.success("**OFI outperforms raw Volume** - direction matters!")
-        else:
-            st.info("Volume performs comparably to OFI")
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=results_df['Phase'],
+        y=results_df['OFI R²'],
+        name='OFI',
+        marker_color='#2E86AB',
+        text=[f"{r:.4f}" for r in results_df['OFI R²']],
+        textposition='outside'
+    ))
+    fig.add_trace(go.Bar(
+        x=results_df['Phase'],
+        y=results_df['TI R²'],
+        name='Trade Imbalance',
+        marker_color='#06A77D',
+        text=[f"{r:.4f}" for r in results_df['TI R²']],
+        textposition='outside'
+    ))
+    fig.add_trace(go.Bar(
+        x=results_df['Phase'],
+        y=results_df['Volume R²'],
+        name='Volume',
+        marker_color='#A23B72',
+        text=[f"{r:.4f}" for r in results_df['Volume R²']],
+        textposition='outside'
+    ))
+    fig.update_layout(
+        title="R² Comparison: OFI vs TI vs Volume by Phase (45-min, Z-score filtered)",
+        xaxis_title="Phase",
+        yaxis_title="R²",
+        barmode='group',
+        height=450
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ============================================================================
