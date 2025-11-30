@@ -1271,6 +1271,7 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
         st.subheader("Daily Analysis: 45-min Window + Z-Score")
         st.markdown("**Config:** 45-minute time window | Z-Score (3σ) outlier removal")
         st.markdown("*Each point = one day's beta and average depth*")
+        st.markdown("**Per Cont et al. (2011):** β = c / AD^λ → log(β) = log(c) - λ × log(AD)")
 
         with st.spinner("Computing daily beta-depth analysis..."):
             daily_df = compute_daily_depth_analysis(raw_ofi_df)
@@ -1286,44 +1287,51 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
             with col1:
                 st.markdown("### Level 1 Depth (Best Bid/Ask)")
 
-                # Create scatter plot
+                # Filter positive values for log-log regression
+                valid_df1 = daily_df[(daily_df['ad_level1'] > 0) & (daily_df['beta'] > 0)].copy()
+
+                # Create scatter plot (log-log scale)
                 fig1 = go.Figure()
                 fig1.add_trace(go.Scatter(
-                    x=daily_df['ad_level1'],
-                    y=daily_df['beta'],
+                    x=valid_df1['ad_level1'],
+                    y=valid_df1['beta'],
                     mode='markers+text',
                     marker=dict(size=10, color='#2E86AB'),
-                    text=daily_df['date'].astype(str).str[-5:],  # Show MM-DD
+                    text=valid_df1['date'].astype(str).str[-5:],  # Show MM-DD
                     textposition='top center',
                     textfont=dict(size=8),
                     hovertemplate='<b>Date:</b> %{text}<br><b>AD:</b> %{x:,.0f}<br><b>Beta:</b> %{y:.2e}<extra></extra>'
                 ))
 
-                # Add trend line
-                if len(daily_df) >= 2:
-                    slope, intercept, r_value, p_value, _ = stats.linregress(
-                        daily_df['ad_level1'], daily_df['beta']
-                    )
-                    x_line = [daily_df['ad_level1'].min(), daily_df['ad_level1'].max()]
-                    y_line = [slope * x + intercept for x in x_line]
+                # Log-log regression: log(β) = log(c) - λ * log(AD)
+                if len(valid_df1) >= 2:
+                    log_ad = np.log(valid_df1['ad_level1'])
+                    log_beta = np.log(valid_df1['beta'])
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(log_ad, log_beta)
+
+                    # λ = -slope (since log(β) = log(c) - λ * log(AD))
+                    lambda_est = -slope
+
+                    # Add fitted line (in original space)
+                    x_range = np.linspace(valid_df1['ad_level1'].min(), valid_df1['ad_level1'].max(), 100)
+                    y_fitted = np.exp(intercept) * np.power(x_range, slope)
                     fig1.add_trace(go.Scatter(
-                        x=x_line, y=y_line,
+                        x=x_range, y=y_fitted,
                         mode='lines',
                         line=dict(color='red', dash='dash', width=2),
-                        name='Trend'
+                        name='Fitted: β = c/AD^λ'
                     ))
 
-                    # Annotation
-                    direction = "β DECREASES" if slope < 0 else "β INCREASES"
-                    color = "green" if slope < 0 else "red"
-                    result = "Theory HOLDS" if slope < 0 else "Theory DOESN'T hold"
+                    # Annotation with λ
+                    result = "Theory HOLDS" if lambda_est > 0 else "Theory DOESN'T hold"
+                    color = "green" if lambda_est > 0 else "red"
                     fig1.add_annotation(
-                        text=f"Slope: {slope:.2e}<br>R²: {r_value**2:.3f}<br>p-value: {p_value:.3f}<br><b>{direction}</b> → {result}",
+                        text=f"<b>λ = {lambda_est:.3f}</b> ± {std_err:.3f}<br>Log-Log R²: {r_value**2:.3f}<br>p-value: {p_value:.3f}<br><b>{result}</b>",
                         xref="paper", yref="paper",
                         x=0.95, y=0.95,
                         showarrow=False,
                         bgcolor='black',
-                        font=dict(color=color if slope < 0 else 'red', size=10),
+                        font=dict(color=color, size=10),
                         xanchor='right',
                         yanchor='top',
                         bordercolor='white',
@@ -1331,9 +1339,11 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
                     )
 
                 fig1.update_layout(
-                    title="Beta vs Level 1 Depth (Daily)",
+                    title="Beta vs Level 1 Depth (Log-Log)",
                     xaxis_title="Average Depth (Best Bid/Ask)",
                     yaxis_title="Beta (Price Impact)",
+                    xaxis_type="log",
+                    yaxis_type="log",
                     height=450,
                     showlegend=False
                 )
@@ -1342,44 +1352,51 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
             with col2:
                 st.markdown("### Level 2 Depth (Full Orderbook)")
 
-                # Create scatter plot
+                # Filter positive values for log-log regression
+                valid_df2 = daily_df[(daily_df['ad_level2'] > 0) & (daily_df['beta'] > 0)].copy()
+
+                # Create scatter plot (log-log scale)
                 fig2 = go.Figure()
                 fig2.add_trace(go.Scatter(
-                    x=daily_df['ad_level2'],
-                    y=daily_df['beta'],
+                    x=valid_df2['ad_level2'],
+                    y=valid_df2['beta'],
                     mode='markers+text',
                     marker=dict(size=10, color='#A23B72'),
-                    text=daily_df['date'].astype(str).str[-5:],  # Show MM-DD
+                    text=valid_df2['date'].astype(str).str[-5:],  # Show MM-DD
                     textposition='top center',
                     textfont=dict(size=8),
                     hovertemplate='<b>Date:</b> %{text}<br><b>AD:</b> %{x:,.0f}<br><b>Beta:</b> %{y:.2e}<extra></extra>'
                 ))
 
-                # Add trend line
-                if len(daily_df) >= 2:
-                    slope2, intercept2, r_value2, p_value2, _ = stats.linregress(
-                        daily_df['ad_level2'], daily_df['beta']
-                    )
-                    x_line2 = [daily_df['ad_level2'].min(), daily_df['ad_level2'].max()]
-                    y_line2 = [slope2 * x + intercept2 for x in x_line2]
+                # Log-log regression: log(β) = log(c) - λ * log(AD)
+                if len(valid_df2) >= 2:
+                    log_ad2 = np.log(valid_df2['ad_level2'])
+                    log_beta2 = np.log(valid_df2['beta'])
+                    slope2, intercept2, r_value2, p_value2, std_err2 = stats.linregress(log_ad2, log_beta2)
+
+                    # λ = -slope (since log(β) = log(c) - λ * log(AD))
+                    lambda_est2 = -slope2
+
+                    # Add fitted line (in original space)
+                    x_range2 = np.linspace(valid_df2['ad_level2'].min(), valid_df2['ad_level2'].max(), 100)
+                    y_fitted2 = np.exp(intercept2) * np.power(x_range2, slope2)
                     fig2.add_trace(go.Scatter(
-                        x=x_line2, y=y_line2,
+                        x=x_range2, y=y_fitted2,
                         mode='lines',
                         line=dict(color='red', dash='dash', width=2),
-                        name='Trend'
+                        name='Fitted: β = c/AD^λ'
                     ))
 
-                    # Annotation
-                    direction2 = "β DECREASES" if slope2 < 0 else "β INCREASES"
-                    color2 = "green" if slope2 < 0 else "red"
-                    result2 = "Theory HOLDS" if slope2 < 0 else "Theory DOESN'T hold"
+                    # Annotation with λ
+                    result2 = "Theory HOLDS" if lambda_est2 > 0 else "Theory DOESN'T hold"
+                    color2 = "green" if lambda_est2 > 0 else "red"
                     fig2.add_annotation(
-                        text=f"Slope: {slope2:.2e}<br>R²: {r_value2**2:.3f}<br>p-value: {p_value2:.3f}<br><b>{direction2}</b> → {result2}",
+                        text=f"<b>λ = {lambda_est2:.3f}</b> ± {std_err2:.3f}<br>Log-Log R²: {r_value2**2:.3f}<br>p-value: {p_value2:.3f}<br><b>{result2}</b>",
                         xref="paper", yref="paper",
                         x=0.95, y=0.95,
                         showarrow=False,
                         bgcolor='black',
-                        font=dict(color=color2 if slope2 < 0 else 'red', size=10),
+                        font=dict(color=color2, size=10),
                         xanchor='right',
                         yanchor='top',
                         bordercolor='white',
@@ -1387,9 +1404,11 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
                     )
 
                 fig2.update_layout(
-                    title="Beta vs Level 2 Depth (Daily)",
+                    title="Beta vs Level 2 Depth (Log-Log)",
                     xaxis_title="Average Depth (Full Orderbook)",
                     yaxis_title="Beta (Price Impact)",
+                    xaxis_type="log",
+                    yaxis_type="log",
                     height=450,
                     showlegend=False
                 )
