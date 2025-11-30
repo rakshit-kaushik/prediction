@@ -976,6 +976,63 @@ def compute_depth_analysis(raw_ofi_df, split_method):
     return pd.DataFrame(results) if results else None
 
 
+def compute_daily_depth_analysis(raw_ofi_df):
+    """
+    Compute beta and average depth for each day.
+
+    Uses fixed config: 45-min time window + Z-score outlier removal.
+    This gives ~21 data points (one per day) instead of just 3 phases.
+    """
+    dep_var = get_dependent_variable_name()
+
+    # Config: 45-min window, Z-score filtering (matches TI comparison)
+    TIME_WINDOW = 45
+
+    # Aggregate to 45-min intervals
+    aggregated = aggregate_ofi_data(raw_ofi_df.copy(), f'{TIME_WINDOW}min')
+
+    if aggregated is None or len(aggregated) == 0:
+        return None
+
+    # Apply Z-score filtering
+    filtered = filter_outliers_zscore(aggregated, 'ofi', threshold=3)
+
+    if filtered is None or len(filtered) == 0:
+        return None
+
+    # Group by date
+    filtered = filtered.copy()
+    filtered['date'] = filtered['timestamp'].dt.date
+
+    results = []
+    for date, day_df in filtered.groupby('date'):
+        # Need enough points for regression
+        day_clean = day_df.dropna(subset=['ofi', dep_var])
+        if len(day_clean) < 5:
+            continue
+
+        # Run regression for this day
+        slope, intercept, r_value, p_value, std_err = stats.linregress(
+            day_clean['ofi'], day_clean[dep_var]
+        )
+
+        # Calculate average depths for this day
+        ad_level1 = (day_df['best_bid_size'].mean() + day_df['best_ask_size'].mean()) / 2
+        ad_level2 = (day_df['total_bid_size'].mean() + day_df['total_ask_size'].mean()) / 2
+
+        results.append({
+            'date': date,
+            'beta': slope,
+            'r_squared': r_value ** 2,
+            'p_value': p_value,
+            'ad_level1': ad_level1,
+            'ad_level2': ad_level2,
+            'n_obs': len(day_clean)
+        })
+
+    return pd.DataFrame(results) if results else None
+
+
 def plot_beta_vs_depth(data_points, method_name, depth_type='level1'):
     """Create scatter plot of beta vs average depth"""
     import plotly.graph_objects as go
@@ -1058,7 +1115,7 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
     st.success(f"Computed {len(results_df)} beta-depth pairs")
 
     # Create tabs
-    tabs = st.tabs(["Level 1 Depth", "Level 2 Depth", "Comparison", "Summary"])
+    tabs = st.tabs(["Level 1 Depth", "Level 2 Depth", "Comparison", "Summary", "Daily Analysis"])
 
     # Tab 1: Level 1 Depth
     with tabs[0]:
@@ -1209,92 +1266,232 @@ def render_depth_analysis(raw_ofi_df, split_method, start_datetime, end_datetime
         csv = results_df.to_csv(index=False)
         st.download_button("Download CSV", csv, "depth_analysis.csv", "text/csv")
 
+    # Tab 5: Daily Analysis
+    with tabs[4]:
+        st.subheader("Daily Analysis: 45-min Window + Z-Score")
+        st.markdown("**Config:** 45-minute time window | Z-Score (3σ) outlier removal")
+        st.markdown("*Each point = one day's beta and average depth*")
+
+        with st.spinner("Computing daily beta-depth analysis..."):
+            daily_df = compute_daily_depth_analysis(raw_ofi_df)
+
+        if daily_df is None or len(daily_df) == 0:
+            st.error("Could not compute daily analysis. Check data availability.")
+        else:
+            st.success(f"Computed {len(daily_df)} daily data points")
+
+            # Create side-by-side scatter plots for Level 1 and Level 2
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### Level 1 Depth (Best Bid/Ask)")
+
+                # Create scatter plot
+                fig1 = go.Figure()
+                fig1.add_trace(go.Scatter(
+                    x=daily_df['ad_level1'],
+                    y=daily_df['beta'],
+                    mode='markers+text',
+                    marker=dict(size=10, color='#2E86AB'),
+                    text=daily_df['date'].astype(str).str[-5:],  # Show MM-DD
+                    textposition='top center',
+                    textfont=dict(size=8),
+                    hovertemplate='<b>Date:</b> %{text}<br><b>AD:</b> %{x:,.0f}<br><b>Beta:</b> %{y:.2e}<extra></extra>'
+                ))
+
+                # Add trend line
+                if len(daily_df) >= 2:
+                    slope, intercept, r_value, p_value, _ = stats.linregress(
+                        daily_df['ad_level1'], daily_df['beta']
+                    )
+                    x_line = [daily_df['ad_level1'].min(), daily_df['ad_level1'].max()]
+                    y_line = [slope * x + intercept for x in x_line]
+                    fig1.add_trace(go.Scatter(
+                        x=x_line, y=y_line,
+                        mode='lines',
+                        line=dict(color='red', dash='dash', width=2),
+                        name='Trend'
+                    ))
+
+                    # Annotation
+                    direction = "β DECREASES" if slope < 0 else "β INCREASES"
+                    color = "green" if slope < 0 else "red"
+                    result = "Theory HOLDS" if slope < 0 else "Theory DOESN'T hold"
+                    fig1.add_annotation(
+                        text=f"Slope: {slope:.2e}<br>R²: {r_value**2:.3f}<br>p-value: {p_value:.3f}<br><b>{direction}</b> → {result}",
+                        xref="paper", yref="paper",
+                        x=0.95, y=0.95,
+                        showarrow=False,
+                        bgcolor='black',
+                        font=dict(color=color if slope < 0 else 'red', size=10),
+                        xanchor='right',
+                        yanchor='top',
+                        bordercolor='white',
+                        borderwidth=1
+                    )
+
+                fig1.update_layout(
+                    title="Beta vs Level 1 Depth (Daily)",
+                    xaxis_title="Average Depth (Best Bid/Ask)",
+                    yaxis_title="Beta (Price Impact)",
+                    height=450,
+                    showlegend=False
+                )
+                st.plotly_chart(fig1, use_container_width=True)
+
+            with col2:
+                st.markdown("### Level 2 Depth (Full Orderbook)")
+
+                # Create scatter plot
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(
+                    x=daily_df['ad_level2'],
+                    y=daily_df['beta'],
+                    mode='markers+text',
+                    marker=dict(size=10, color='#A23B72'),
+                    text=daily_df['date'].astype(str).str[-5:],  # Show MM-DD
+                    textposition='top center',
+                    textfont=dict(size=8),
+                    hovertemplate='<b>Date:</b> %{text}<br><b>AD:</b> %{x:,.0f}<br><b>Beta:</b> %{y:.2e}<extra></extra>'
+                ))
+
+                # Add trend line
+                if len(daily_df) >= 2:
+                    slope2, intercept2, r_value2, p_value2, _ = stats.linregress(
+                        daily_df['ad_level2'], daily_df['beta']
+                    )
+                    x_line2 = [daily_df['ad_level2'].min(), daily_df['ad_level2'].max()]
+                    y_line2 = [slope2 * x + intercept2 for x in x_line2]
+                    fig2.add_trace(go.Scatter(
+                        x=x_line2, y=y_line2,
+                        mode='lines',
+                        line=dict(color='red', dash='dash', width=2),
+                        name='Trend'
+                    ))
+
+                    # Annotation
+                    direction2 = "β DECREASES" if slope2 < 0 else "β INCREASES"
+                    color2 = "green" if slope2 < 0 else "red"
+                    result2 = "Theory HOLDS" if slope2 < 0 else "Theory DOESN'T hold"
+                    fig2.add_annotation(
+                        text=f"Slope: {slope2:.2e}<br>R²: {r_value2**2:.3f}<br>p-value: {p_value2:.3f}<br><b>{direction2}</b> → {result2}",
+                        xref="paper", yref="paper",
+                        x=0.95, y=0.95,
+                        showarrow=False,
+                        bgcolor='black',
+                        font=dict(color=color2 if slope2 < 0 else 'red', size=10),
+                        xanchor='right',
+                        yanchor='top',
+                        bordercolor='white',
+                        borderwidth=1
+                    )
+
+                fig2.update_layout(
+                    title="Beta vs Level 2 Depth (Daily)",
+                    xaxis_title="Average Depth (Full Orderbook)",
+                    yaxis_title="Beta (Price Impact)",
+                    height=450,
+                    showlegend=False
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+            # Daily results table
+            st.markdown("---")
+            st.markdown("### Daily Results Table")
+            st.dataframe(
+                daily_df.style.format({
+                    'beta': '{:.2e}',
+                    'r_squared': '{:.4f}',
+                    'p_value': '{:.2e}',
+                    'ad_level1': '{:,.0f}',
+                    'ad_level2': '{:,.0f}',
+                    'n_obs': '{:,.0f}'
+                }),
+                use_container_width=True,
+                height=400
+            )
+
+            # Download button
+            csv_daily = daily_df.to_csv(index=False)
+            st.download_button("Download Daily CSV", csv_daily, "daily_depth_analysis.csv", "text/csv")
+
 
 # ============================================================================
 # TI COMPARISON RENDER FUNCTION
 # ============================================================================
 
-def aggregate_trades_by_time_window(df, time_window_minutes):
-    """Aggregate trade data to calculate Trade Imbalance (TI)"""
-    if df is None or len(df) == 0:
-        return None
-
-    df = df.copy()
-    df = df.sort_values('timestamp').reset_index(drop=True)
-
-    tw_str = f'{time_window_minutes}min'
-    df['time_bin'] = df['timestamp'].dt.floor(tw_str)
-
-    df['signed_volume'] = df['direction'] * df['shares_normalized']
-
-    agg = df.groupby('time_bin').agg({
-        'signed_volume': 'sum',
-        'shares_normalized': 'sum',
-        'direction': 'count',
-        'price': ['mean', 'first', 'last']
-    }).reset_index()
-
-    agg.columns = ['timestamp', 'trade_imbalance', 'total_volume', 'num_trades',
-                   'avg_price', 'first_price', 'last_price']
-
-    return agg
+# TI Analysis Configuration (same as OFI)
+TI_OUTLIER_METHODS = [
+    'Raw',
+    'IQR (1.5x)',
+    'Pctl (1%-99%)',
+    'Z-Score (3)',
+    'Winsorized',
+    'Abs (200k)',
+    'Abs (100k)',
+    'MAD (3)',
+    'Pctl (5%-95%)'
+]
 
 
-def aggregate_ofi_by_time_window(df, time_window_minutes):
-    """Aggregate OFI data by time window for TI comparison"""
-    if df is None or len(df) == 0:
-        return None
-
-    df = df.copy()
-    df = df.sort_values('timestamp').reset_index(drop=True)
-
-    tw_str = f'{time_window_minutes}min'
-    df['time_bin'] = df['timestamp'].dt.floor(tw_str)
-
-    agg = df.groupby('time_bin').agg({
-        'ofi': 'sum',
-        'mid_price': ['first', 'last']
-    }).reset_index()
-
-    agg.columns = ['timestamp', 'ofi', 'mid_price_first', 'mid_price_last']
-    agg['mid_price'] = agg['mid_price_last']
-    agg['delta_mid_price'] = agg['mid_price'].diff()
-    agg['delta_mid_price_ticks'] = agg['delta_mid_price'] / TICK_SIZE
-    agg = agg.iloc[1:].reset_index(drop=True)
-
-    return agg
+def load_ti_81_configs():
+    """Load pre-computed TI 81-config results"""
+    ti_file = DATA_DIR / "ti_81_configs.csv"
+    if ti_file.exists():
+        return pd.read_csv(ti_file)
+    return None
 
 
-def run_ti_regression(x, y):
-    """Run OLS regression for TI comparison"""
-    if len(x) < 3:
-        return None
+def compute_ofi_81_configs(raw_ofi_df):
+    """Compute OFI R² for all 81 configurations to match TI analysis"""
+    dep_var = get_dependent_variable_name()
+    results = []
 
-    mask = ~(np.isnan(x) | np.isnan(y))
-    x_clean = x[mask]
-    y_clean = y[mask]
+    for tw in TIME_WINDOWS:
+        time_window_str = f'{tw}min'
+        aggregated = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
 
-    if len(x_clean) < 3:
-        return None
+        if aggregated is None or len(aggregated) < 10:
+            continue
 
-    slope, intercept, r_value, p_value, std_err = stats.linregress(x_clean, y_clean)
+        outlier_methods = get_outlier_methods(aggregated)
 
-    return {
-        'slope': slope,
-        'intercept': intercept,
-        'r_squared': r_value ** 2,
-        'p_value': p_value,
-        'n_obs': len(x_clean)
-    }
+        for method_idx, (method_full_name, method_df) in enumerate(outlier_methods.items()):
+            if len(method_df) < 10:
+                continue
+
+            df_clean = method_df.dropna(subset=['ofi', dep_var])
+            if len(df_clean) < 10:
+                continue
+
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                df_clean['ofi'], df_clean[dep_var]
+            )
+
+            # Map to TI method name format
+            method_name = TI_OUTLIER_METHODS[method_idx] if method_idx < len(TI_OUTLIER_METHODS) else method_full_name
+
+            results.append({
+                'time_window': tw,
+                'outlier_method': method_name,
+                'r_squared': r_value ** 2,
+                'beta': slope,
+                'p_value': p_value,
+                'n_windows': len(df_clean),
+                'std_err': std_err
+            })
+
+    return pd.DataFrame(results) if results else None
 
 
 def render_ti_comparison(market_config, raw_ofi_df):
-    """Render the TI vs OFI Comparison content
+    """Render the TI vs OFI Comparison content with 81-config heatmaps
 
-    Configuration:
-    - Time Window: 45 minutes (fixed)
-    - Outlier Method: Z-Score (3σ)
-    - Phases: Early, Middle, Near Expiry
+    Features:
+    - TI R² Heatmap (81 configs)
+    - OFI R² Heatmap (81 configs)
+    - Difference Heatmap (OFI R² - TI R²)
+    - Full TI metrics (beta, p-value, n_obs)
     """
     st.header("Trade Imbalance vs OFI Comparison")
     st.markdown("""
@@ -1303,176 +1500,424 @@ def render_ti_comparison(market_config, raw_ofi_df):
     - **OFI** = Order flow imbalance from orderbook changes
     - **TI** = Trade Imbalance = Σ(buy_volume) - Σ(sell_volume)
 
-    The paper found OFI outperforms TI because OFI captures queue dynamics.
+    The paper found OFI (R²=65%) significantly outperforms TI (R²=32%) because OFI captures queue dynamics.
     """)
 
-    st.info("**Configuration:** 45-min time window | Z-Score (3σ) outlier removal | 3 phases")
+    # Create tabs for different views
+    ti_tabs = st.tabs(["81-Config Heatmaps", "TI Full Results", "Phase Comparison"])
 
-    # Load trades data
-    trades_file = market_config.get('trades_file')
-    if not trades_file:
-        st.warning("Trade data not configured for this market")
-        return
+    # ========================================================================
+    # TAB 1: 81-Config Heatmaps
+    # ========================================================================
+    with ti_tabs[0]:
+        st.subheader("81-Configuration Analysis: 9 Time Windows x 9 Outlier Methods")
 
-    trades_path = DATA_DIR / trades_file
-    if not trades_path.exists():
-        st.warning(f"Trade data file not found: {trades_file}")
-        return
+        # Load TI results
+        ti_df = load_ti_81_configs()
 
-    trades_df = pd.read_csv(trades_path)
-    trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'], format='mixed', utc=True)
+        if ti_df is None:
+            st.warning("TI 81-config results not found. Run `python data_pipeline/04_process_trades_ti.py` first.")
+            return
 
-    st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} trades")
+        # Compute OFI 81-config results
+        with st.spinner("Computing OFI 81-config results..."):
+            ofi_df = compute_ofi_81_configs(raw_ofi_df)
 
-    # Fixed configuration
-    TIME_WINDOW = 45  # minutes
+        if ofi_df is None:
+            st.error("Could not compute OFI results")
+            return
 
-    # Aggregate OFI data with 45-min window
-    ofi_agg = aggregate_ofi_by_time_window(raw_ofi_df, TIME_WINDOW)
-    ti_agg = aggregate_trades_by_time_window(trades_df, TIME_WINDOW)
+        st.success(f"Loaded {len(ti_df)} TI configs, computed {len(ofi_df)} OFI configs")
 
-    if ofi_agg is None or ti_agg is None:
-        st.error("Could not aggregate data")
-        return
+        # Summary metrics at top
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("OFI Best R²", f"{ofi_df['r_squared'].max():.4f}")
+        with col2:
+            st.metric("TI Best R²", f"{ti_df['r_squared'].max():.4f}")
+        with col3:
+            st.metric("OFI Mean R²", f"{ofi_df['r_squared'].mean():.4f}")
+        with col4:
+            st.metric("TI Mean R²", f"{ti_df['r_squared'].mean():.4f}")
 
-    # Merge OFI and TI data
-    merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='inner')
-    merged = merged.dropna(subset=['ofi', 'trade_imbalance', 'delta_mid_price_ticks'])
+        # Best configs
+        ofi_best = ofi_df.loc[ofi_df['r_squared'].idxmax()]
+        ti_best = ti_df.loc[ti_df['r_squared'].idxmax()]
+        st.info(f"**OFI Best:** {int(ofi_best['time_window'])}min + {ofi_best['outlier_method']} (R²={ofi_best['r_squared']:.4f})")
+        st.info(f"**TI Best:** {int(ti_best['time_window'])}min + {ti_best['outlier_method']} (R²={ti_best['r_squared']:.4f})")
 
-    if len(merged) < 30:
-        st.error(f"Not enough data after merge: {len(merged)} observations")
-        return
+        st.markdown("---")
 
-    # Apply Z-score outlier filtering to OFI
-    mean_ofi = merged['ofi'].mean()
-    std_ofi = merged['ofi'].std()
-    if std_ofi > 0:
-        z_scores = (merged['ofi'] - mean_ofi) / std_ofi
-        merged = merged[z_scores.abs() <= 3].copy()
+        # Create pivot tables for heatmaps
+        ti_pivot = ti_df.pivot(index='time_window', columns='outlier_method', values='r_squared')
+        ofi_pivot = ofi_df.pivot(index='time_window', columns='outlier_method', values='r_squared')
 
-    st.caption(f"After Z-score filtering: {len(merged)} observations")
+        # Reorder columns to match TI_OUTLIER_METHODS
+        ti_pivot = ti_pivot.reindex(columns=TI_OUTLIER_METHODS)
+        ofi_pivot = ofi_pivot.reindex(columns=TI_OUTLIER_METHODS)
 
-    # Split into 3 phases
-    n = len(merged)
-    phase_size = n // 3
+        # 1. TI R² Heatmap
+        st.markdown("### 1. Trade Imbalance R² Heatmap")
+        st.markdown("*TI = Σ(buy_volume) - Σ(sell_volume) per time window*")
 
-    phases = {
-        'Early': merged.iloc[:phase_size].copy(),
-        'Middle': merged.iloc[phase_size:2*phase_size].copy(),
-        'Near Expiry': merged.iloc[2*phase_size:].copy()
-    }
+        # Use Plotly heatmap for better visualization
+        fig_ti = go.Figure(data=go.Heatmap(
+            z=ti_pivot.values * 100,  # Convert to percentage
+            x=ti_pivot.columns,
+            y=[f"{tw}min" for tw in ti_pivot.index],
+            colorscale='RdYlGn',
+            text=[[f"{v:.2f}%" if pd.notna(v) else "N/A" for v in row] for row in ti_pivot.values * 100],
+            texttemplate="%{text}",
+            textfont={"size": 10},
+            hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
+            colorbar=dict(title="R² (%)")
+        ))
+        fig_ti.update_layout(
+            title="TI R² (%) - Trade Imbalance vs Price Change",
+            xaxis_title="Outlier Method",
+            yaxis_title="Time Window",
+            height=450
+        )
+        st.plotly_chart(fig_ti, use_container_width=True)
 
-    # Calculate R² for each phase
-    results = []
-    for phase_name, phase_df in phases.items():
-        if len(phase_df) < 10:
-            continue
+        # 2. OFI R² Heatmap
+        st.markdown("### 2. OFI R² Heatmap")
+        st.markdown("*OFI = Order Flow Imbalance from orderbook changes*")
 
-        ofi_reg = run_ti_regression(phase_df['ofi'].values, phase_df['delta_mid_price_ticks'].values)
-        ti_reg = run_ti_regression(phase_df['trade_imbalance'].values, phase_df['delta_mid_price_ticks'].values)
-        vol_reg = run_ti_regression(phase_df['total_volume'].values, phase_df['delta_mid_price_ticks'].values)
+        fig_ofi = go.Figure(data=go.Heatmap(
+            z=ofi_pivot.values * 100,
+            x=ofi_pivot.columns,
+            y=[f"{tw}min" for tw in ofi_pivot.index],
+            colorscale='RdYlGn',
+            text=[[f"{v:.2f}%" if pd.notna(v) else "N/A" for v in row] for row in ofi_pivot.values * 100],
+            texttemplate="%{text}",
+            textfont={"size": 10},
+            hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
+            colorbar=dict(title="R² (%)")
+        ))
+        fig_ofi.update_layout(
+            title="OFI R² (%) - Order Flow Imbalance vs Price Change",
+            xaxis_title="Outlier Method",
+            yaxis_title="Time Window",
+            height=450
+        )
+        st.plotly_chart(fig_ofi, use_container_width=True)
 
-        if ofi_reg and ti_reg:
+        # 3. Difference Heatmap (OFI - TI)
+        st.markdown("### 3. Difference Heatmap (OFI R² - TI R²)")
+        st.markdown("*Positive (green) = OFI wins, Negative (red) = TI wins*")
+
+        # Calculate difference
+        diff_pivot = ofi_pivot - ti_pivot
+
+        fig_diff = go.Figure(data=go.Heatmap(
+            z=diff_pivot.values * 100,
+            x=diff_pivot.columns,
+            y=[f"{tw}min" for tw in diff_pivot.index],
+            colorscale='RdYlGn',
+            zmid=0,  # Center at 0
+            text=[[f"{v:+.2f}%" if pd.notna(v) else "N/A" for v in row] for row in diff_pivot.values * 100],
+            texttemplate="%{text}",
+            textfont={"size": 10},
+            hovertemplate="Time: %{y}<br>Method: %{x}<br>Diff: %{z:+.2f}%<extra></extra>",
+            colorbar=dict(title="OFI - TI (%)")
+        ))
+        fig_diff.update_layout(
+            title="OFI R² minus TI R² (Positive = OFI wins)",
+            xaxis_title="Outlier Method",
+            yaxis_title="Time Window",
+            height=450
+        )
+        st.plotly_chart(fig_diff, use_container_width=True)
+
+        # Summary statistics
+        st.markdown("---")
+        st.markdown("### Summary Statistics")
+
+        # Merge for comparison
+        merged_stats = pd.merge(
+            ofi_df[['time_window', 'outlier_method', 'r_squared']].rename(columns={'r_squared': 'ofi_r2'}),
+            ti_df[['time_window', 'outlier_method', 'r_squared']].rename(columns={'r_squared': 'ti_r2'}),
+            on=['time_window', 'outlier_method'],
+            how='inner'
+        )
+        merged_stats['diff'] = merged_stats['ofi_r2'] - merged_stats['ti_r2']
+        merged_stats['winner'] = np.where(merged_stats['ofi_r2'] > merged_stats['ti_r2'], 'OFI', 'TI')
+
+        ofi_wins = (merged_stats['winner'] == 'OFI').sum()
+        ti_wins = (merged_stats['winner'] == 'TI').sum()
+        total = len(merged_stats)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("OFI Wins", f"{ofi_wins}/{total} ({100*ofi_wins/total:.1f}%)")
+        with col2:
+            st.metric("TI Wins", f"{ti_wins}/{total} ({100*ti_wins/total:.1f}%)")
+        with col3:
+            avg_diff = merged_stats['diff'].mean() * 100
+            st.metric("Avg Difference", f"{avg_diff:+.2f}%")
+
+        if ofi_wins > ti_wins:
+            st.success(f"**OFI outperforms TI in {ofi_wins}/{total} configurations** (consistent with Cont et al. 2011)")
+        else:
+            st.warning(f"**TI outperforms OFI in {ti_wins}/{total} configurations** (contrary to Cont et al. 2011)")
+
+    # ========================================================================
+    # TAB 2: TI Full Results (Paper Metrics)
+    # ========================================================================
+    with ti_tabs[1]:
+        st.subheader("TI Full Results (All Paper Metrics)")
+        st.markdown("*Complete regression results including beta, p-value, n_obs*")
+
+        ti_df = load_ti_81_configs()
+
+        if ti_df is None:
+            st.warning("TI 81-config results not found.")
+            return
+
+        # Summary tables by time window
+        st.markdown("### Results by Time Window")
+
+        for tw in TIME_WINDOWS:
+            tw_data = ti_df[ti_df['time_window'] == tw]
+            if len(tw_data) == 0:
+                continue
+
+            st.markdown(f"#### {tw} Minute Window")
+
+            # Format the data
+            display_df = tw_data[['outlier_method', 'r_squared', 'beta', 'p_value', 'n_windows']].copy()
+            display_df.columns = ['Outlier Method', 'R²', 'Beta (β)', 'p-value', 'N obs']
+
+            st.dataframe(
+                display_df.style.format({
+                    'R²': '{:.4f}',
+                    'Beta (β)': '{:.2e}',
+                    'p-value': '{:.2e}',
+                    'N obs': '{:.0f}'
+                }).background_gradient(subset=['R²'], cmap='RdYlGn'),
+                use_container_width=True,
+                hide_index=True
+            )
+
+        # Full results table
+        st.markdown("---")
+        st.markdown("### Complete Results Table")
+
+        full_display = ti_df[['time_window', 'outlier_method', 'r_squared', 'beta', 'p_value', 'n_windows', 'std_err']].copy()
+        full_display.columns = ['Time Window', 'Outlier Method', 'R²', 'Beta', 'p-value', 'N obs', 'Std Error']
+
+        st.dataframe(
+            full_display.style.format({
+                'R²': '{:.4f}',
+                'Beta': '{:.2e}',
+                'p-value': '{:.2e}',
+                'N obs': '{:.0f}',
+                'Std Error': '{:.2e}'
+            }),
+            use_container_width=True,
+            height=500
+        )
+
+        # Download button
+        csv = ti_df.to_csv(index=False)
+        st.download_button(
+            label="Download TI Results CSV",
+            data=csv,
+            file_name="ti_81_configs.csv",
+            mime="text/csv"
+        )
+
+        # Significance analysis
+        st.markdown("---")
+        st.markdown("### Significance Analysis")
+
+        sig_001 = (ti_df['p_value'] < 0.001).sum()
+        sig_01 = ((ti_df['p_value'] >= 0.001) & (ti_df['p_value'] < 0.01)).sum()
+        sig_05 = ((ti_df['p_value'] >= 0.01) & (ti_df['p_value'] < 0.05)).sum()
+        not_sig = (ti_df['p_value'] >= 0.05).sum()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("p < 0.001", f"{sig_001}/{len(ti_df)}")
+        with col2:
+            st.metric("p < 0.01", f"{sig_01}/{len(ti_df)}")
+        with col3:
+            st.metric("p < 0.05", f"{sig_05}/{len(ti_df)}")
+        with col4:
+            st.metric("Not Significant", f"{not_sig}/{len(ti_df)}")
+
+    # ========================================================================
+    # TAB 3: Phase Comparison (Original View)
+    # ========================================================================
+    with ti_tabs[2]:
+        st.subheader("3-Phase Comparison (45-min, Z-Score)")
+        st.markdown("*Fixed config: 45-min time window | Z-Score (3σ) outlier removal*")
+
+        # Load trades data
+        trades_file = market_config.get('trades_file')
+        if not trades_file:
+            st.warning("Trade data not configured for this market")
+            return
+
+        trades_path = DATA_DIR / trades_file
+        if not trades_path.exists():
+            st.warning(f"Trade data file not found: {trades_file}")
+            return
+
+        trades_df = pd.read_csv(trades_path)
+        trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'], format='mixed', utc=True)
+
+        st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} trades")
+
+        # Fixed configuration
+        TIME_WINDOW_PHASE = 45
+        TIME_WINDOW_STR = f'{TIME_WINDOW_PHASE}min'
+
+        # Aggregate
+        ofi_agg = aggregate_ofi_data(raw_ofi_df.copy(), TIME_WINDOW_STR)
+
+        # Aggregate trades for TI
+        trades_df_copy = trades_df.copy()
+        trades_df_copy = trades_df_copy.sort_values('timestamp').reset_index(drop=True)
+        trades_df_copy['time_bin'] = trades_df_copy['timestamp'].dt.floor(TIME_WINDOW_STR)
+        trades_df_copy['signed_volume'] = trades_df_copy['direction'] * trades_df_copy['shares_normalized']
+
+        ti_agg = trades_df_copy.groupby('time_bin').agg({
+            'signed_volume': 'sum',
+            'shares_normalized': 'sum',
+            'direction': 'count'
+        }).reset_index()
+        ti_agg.columns = ['timestamp', 'trade_imbalance', 'total_volume', 'num_trades']
+
+        if ofi_agg is None or ti_agg is None:
+            st.error("Could not aggregate data")
+            return
+
+        # Merge
+        merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='left')
+        merged['trade_imbalance'] = merged['trade_imbalance'].fillna(0)
+        merged['total_volume'] = merged['total_volume'].fillna(0)
+        merged = merged.dropna(subset=['ofi', 'delta_mid_price_ticks'])
+
+        # Apply Z-score filtering
+        merged = filter_outliers_zscore(merged, 'ofi', threshold=3)
+
+        st.caption(f"After filtering: {len(merged)} observations")
+
+        # Split into 3 phases
+        n = len(merged)
+        phase_size = n // 3
+
+        phases = {
+            'Early': merged.iloc[:phase_size].copy(),
+            'Middle': merged.iloc[phase_size:2*phase_size].copy(),
+            'Near Expiry': merged.iloc[2*phase_size:].copy()
+        }
+
+        # Calculate R² for each phase
+        results = []
+        for phase_name, phase_df in phases.items():
+            if len(phase_df) < 10:
+                continue
+
+            # OFI regression
+            ofi_clean = phase_df.dropna(subset=['ofi', 'delta_mid_price_ticks'])
+            if len(ofi_clean) >= 3:
+                slope_ofi, _, r_ofi, p_ofi, _ = stats.linregress(
+                    ofi_clean['ofi'], ofi_clean['delta_mid_price_ticks']
+                )
+            else:
+                continue
+
+            # TI regression
+            ti_clean = phase_df.dropna(subset=['trade_imbalance', 'delta_mid_price_ticks'])
+            if len(ti_clean) >= 3:
+                slope_ti, _, r_ti, p_ti, _ = stats.linregress(
+                    ti_clean['trade_imbalance'], ti_clean['delta_mid_price_ticks']
+                )
+            else:
+                continue
+
+            # Volume regression
+            vol_clean = phase_df.dropna(subset=['total_volume', 'delta_mid_price_ticks'])
+            if len(vol_clean) >= 3:
+                slope_vol, _, r_vol, p_vol, _ = stats.linregress(
+                    vol_clean['total_volume'], vol_clean['delta_mid_price_ticks']
+                )
+            else:
+                r_vol = 0
+
             results.append({
                 'Phase': phase_name,
                 'N': len(phase_df),
-                'OFI R²': ofi_reg['r_squared'],
-                'TI R²': ti_reg['r_squared'],
-                'Volume R²': vol_reg['r_squared'] if vol_reg else 0,
-                'Winner': 'OFI' if ofi_reg['r_squared'] > ti_reg['r_squared'] else 'TI'
+                'OFI R²': r_ofi ** 2,
+                'OFI β': slope_ofi,
+                'OFI p': p_ofi,
+                'TI R²': r_ti ** 2,
+                'TI β': slope_ti,
+                'TI p': p_ti,
+                'Vol R²': r_vol ** 2 if r_vol else 0,
+                'Winner': 'OFI' if r_ofi ** 2 > r_ti ** 2 else 'TI'
             })
 
-    if not results:
-        st.error("Not enough data for phase comparison")
-        return
+        if not results:
+            st.error("Not enough data for phase comparison")
+            return
 
-    results_df = pd.DataFrame(results)
+        results_df = pd.DataFrame(results)
 
-    # Summary metrics
-    st.subheader("Results by Phase")
+        # Display results
+        st.dataframe(
+            results_df.style.format({
+                'OFI R²': '{:.4f}',
+                'OFI β': '{:.2e}',
+                'OFI p': '{:.2e}',
+                'TI R²': '{:.4f}',
+                'TI β': '{:.2e}',
+                'TI p': '{:.2e}',
+                'Vol R²': '{:.4f}'
+            }).apply(lambda x: ['background-color: #d4edda' if v == 'OFI' else 'background-color: #f8d7da'
+                               for v in x] if x.name == 'Winner' else [''] * len(x), axis=0),
+            use_container_width=True
+        )
 
-    # Display results table
-    st.dataframe(
-        results_df.style.format({
-            'OFI R²': '{:.4f}',
-            'TI R²': '{:.4f}',
-            'Volume R²': '{:.4f}'
-        }).apply(lambda x: ['background-color: #d4edda' if v == 'OFI' else 'background-color: #f8d7da'
-                           for v in x] if x.name == 'Winner' else [''] * len(x), axis=0),
-        use_container_width=True
-    )
+        # Bar chart
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=results_df['Phase'],
+            y=results_df['OFI R²'],
+            name='OFI',
+            marker_color='#2E86AB',
+            text=[f"{r:.4f}" for r in results_df['OFI R²']],
+            textposition='outside'
+        ))
+        fig.add_trace(go.Bar(
+            x=results_df['Phase'],
+            y=results_df['TI R²'],
+            name='Trade Imbalance',
+            marker_color='#06A77D',
+            text=[f"{r:.4f}" for r in results_df['TI R²']],
+            textposition='outside'
+        ))
+        fig.update_layout(
+            title="R² Comparison: OFI vs TI by Phase (45-min, Z-score filtered)",
+            xaxis_title="Phase",
+            yaxis_title="R²",
+            barmode='group',
+            height=450
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Summary statistics
-    st.markdown("---")
-    st.subheader("Summary")
+        # Summary
+        avg_ofi_r2 = results_df['OFI R²'].mean()
+        avg_ti_r2 = results_df['TI R²'].mean()
 
-    ofi_wins = (results_df['Winner'] == 'OFI').sum()
-    ti_wins = (results_df['Winner'] == 'TI').sum()
-    avg_ofi_r2 = results_df['OFI R²'].mean()
-    avg_ti_r2 = results_df['TI R²'].mean()
-    avg_vol_r2 = results_df['Volume R²'].mean()
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Avg OFI R²", f"{avg_ofi_r2:.4f}")
-    with col2:
-        st.metric("Avg TI R²", f"{avg_ti_r2:.4f}")
-    with col3:
-        st.metric("Avg Volume R²", f"{avg_vol_r2:.4f}")
-    with col4:
-        st.metric("OFI wins", f"{ofi_wins}/{len(results_df)} phases")
-
-    # Conclusion
-    st.markdown("---")
-    if avg_ofi_r2 > avg_ti_r2:
-        st.success(f"**OFI outperforms Trade Imbalance** (consistent with Cont et al. 2011)")
-    else:
-        st.warning(f"**Trade Imbalance outperforms OFI** (contrary to Cont et al. 2011)")
-
-    if avg_ofi_r2 > avg_vol_r2:
-        st.success("**OFI outperforms raw Volume** - direction matters!")
-    else:
-        st.info("Volume performs comparably to OFI")
-
-    # Chart
-    st.markdown("---")
-    st.subheader("R² by Phase")
-
-    import plotly.graph_objects as go
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=results_df['Phase'],
-        y=results_df['OFI R²'],
-        name='OFI',
-        marker_color='#2E86AB',
-        text=[f"{r:.4f}" for r in results_df['OFI R²']],
-        textposition='outside'
-    ))
-    fig.add_trace(go.Bar(
-        x=results_df['Phase'],
-        y=results_df['TI R²'],
-        name='Trade Imbalance',
-        marker_color='#06A77D',
-        text=[f"{r:.4f}" for r in results_df['TI R²']],
-        textposition='outside'
-    ))
-    fig.add_trace(go.Bar(
-        x=results_df['Phase'],
-        y=results_df['Volume R²'],
-        name='Volume',
-        marker_color='#A23B72',
-        text=[f"{r:.4f}" for r in results_df['Volume R²']],
-        textposition='outside'
-    ))
-    fig.update_layout(
-        title="R² Comparison: OFI vs TI vs Volume by Phase (45-min, Z-score filtered)",
-        xaxis_title="Phase",
-        yaxis_title="R²",
-        barmode='group',
-        height=450
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        st.markdown("---")
+        if avg_ofi_r2 > avg_ti_r2:
+            st.success(f"**OFI outperforms TI** (Avg R²: OFI={avg_ofi_r2:.4f} vs TI={avg_ti_r2:.4f})")
+        else:
+            st.warning(f"**TI outperforms OFI** (Avg R²: TI={avg_ti_r2:.4f} vs OFI={avg_ofi_r2:.4f})")
 
 
 # ============================================================================
