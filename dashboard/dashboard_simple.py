@@ -1754,21 +1754,20 @@ def render_ti_comparison(market_config, raw_ofi_df):
         st.subheader("3-Phase Comparison (45-min, Z-Score)")
         st.markdown("*Fixed config: 45-min time window | Z-Score (3σ) outlier removal*")
 
-        # Load trades data
-        trades_file = market_config.get('trades_file')
-        if not trades_file:
-            st.warning("Trade data not configured for this market")
+        # Load DOME trade data (262K+ trades)
+        dome_file = DATA_DIR.parent / "DOME_zohran-oct-15_2025-11-29.csv"
+        if not dome_file.exists():
+            st.warning("DOME trade data not found. Please ensure DOME_zohran-oct-15_2025-11-29.csv exists.")
             return
 
-        trades_path = DATA_DIR / trades_file
-        if not trades_path.exists():
-            st.warning(f"Trade data file not found: {trades_file}")
-            return
+        trades_df = pd.read_csv(dome_file)
+        trades_df['timestamp'] = pd.to_datetime(trades_df['block_timestamp'], utc=True)
+        # Normalize shares (divide by 1e6)
+        trades_df['shares_normalized'] = trades_df['shares'] / 1e6
+        # Create direction: +1 for BUY, -1 for SELL
+        trades_df['direction'] = np.where(trades_df['side'] == 'BUY', 1, -1)
 
-        trades_df = pd.read_csv(trades_path)
-        trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'], format='mixed', utc=True)
-
-        st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} trades")
+        st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} DOME trades")
 
         # Fixed configuration
         TIME_WINDOW_PHASE = 45
@@ -1839,11 +1838,35 @@ def render_ti_comparison(market_config, raw_ofi_df):
             else:
                 continue
 
-            # Volume regression
+            # |OFI| regression (per Cont et al. Table 5: |ΔP| = α + β*|OFI| + ε)
+            ofi_abs_clean = phase_df.dropna(subset=['ofi', 'delta_mid_price_ticks'])
+            if len(ofi_abs_clean) >= 3:
+                slope_ofi_abs, _, r_ofi_abs, p_ofi_abs, _ = stats.linregress(
+                    ofi_abs_clean['ofi'].abs(),
+                    ofi_abs_clean['delta_mid_price_ticks'].abs()
+                )
+            else:
+                r_ofi_abs = 0
+
+            # Estimate exponent H via log-log regression (per Cont et al. eq. 16)
+            # log|ΔP| = log(θ) + H * log(VOL) + log(ξ)
+            vol_for_H = phase_df.dropna(subset=['total_volume', 'delta_mid_price_ticks'])
+            H_estimate = 0.5  # Default to square-root
+            if len(vol_for_H) >= 10:
+                # Filter out zeros for log
+                mask = (vol_for_H['total_volume'] > 0) & (vol_for_H['delta_mid_price_ticks'].abs() > 0)
+                vol_log = vol_for_H[mask]
+                if len(vol_log) >= 10:
+                    log_vol = np.log(vol_log['total_volume'])
+                    log_abs_price = np.log(vol_log['delta_mid_price_ticks'].abs())
+                    H_estimate = stats.linregress(log_vol, log_abs_price).slope
+
+            # Volume regression with exponent H: |ΔP| = α + β * VOL^H + ε
             vol_clean = phase_df.dropna(subset=['total_volume', 'delta_mid_price_ticks'])
             if len(vol_clean) >= 3:
+                vol_H = np.power(vol_clean['total_volume'] + 1e-10, H_estimate)
                 slope_vol, _, r_vol, p_vol, _ = stats.linregress(
-                    vol_clean['total_volume'], vol_clean['delta_mid_price_ticks']
+                    vol_H, vol_clean['delta_mid_price_ticks'].abs()
                 )
             else:
                 r_vol = 0
@@ -1854,10 +1877,12 @@ def render_ti_comparison(market_config, raw_ofi_df):
                 'OFI R²': r_ofi ** 2,
                 'OFI β': slope_ofi,
                 'OFI p': p_ofi,
+                '|OFI| R²': r_ofi_abs ** 2 if r_ofi_abs else 0,
                 'TI R²': r_ti ** 2,
                 'TI β': slope_ti,
                 'TI p': p_ti,
                 'Vol R²': r_vol ** 2 if r_vol else 0,
+                'Vol H': H_estimate,
                 'Winner': 'OFI' if r_ofi ** 2 > r_ti ** 2 else 'TI'
             })
 
@@ -1873,10 +1898,12 @@ def render_ti_comparison(market_config, raw_ofi_df):
                 'OFI R²': '{:.4f}',
                 'OFI β': '{:.2e}',
                 'OFI p': '{:.2e}',
+                '|OFI| R²': '{:.4f}',
                 'TI R²': '{:.4f}',
                 'TI β': '{:.2e}',
                 'TI p': '{:.2e}',
-                'Vol R²': '{:.4f}'
+                'Vol R²': '{:.4f}',
+                'Vol H': '{:.3f}'
             }).apply(lambda x: ['background-color: #d4edda' if v == 'OFI' else 'background-color: #f8d7da'
                                for v in x] if x.name == 'Winner' else [''] * len(x), axis=0),
             use_container_width=True
