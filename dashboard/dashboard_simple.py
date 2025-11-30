@@ -2104,7 +2104,8 @@ def main():
 
             # Collect all summary data from all time windows
             all_summary_data = []
-            with st.spinner("Calculating 243 regressions across all time windows..."):
+            overall_data = []  # For overall R² (no phase split)
+            with st.spinner("Calculating regressions across all time windows..."):
                 for tw in TIME_WINDOWS:
                     time_window_str = f'{tw}min'
                     aggregated_df = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
@@ -2118,56 +2119,74 @@ def main():
 
                     for method_name, method_df in outlier_methods.items():
                         df_clean = method_df.dropna(subset=['ofi', dep_var]).copy()
-                        if len(df_clean) < 150:
+                        if len(df_clean) < 10:
                             continue
 
-                        # Use the chosen split method
-                        phases_dict = split_into_phases(df_clean, split_method)
-                        # Rename keys to short form
-                        phases = {
-                            'P1 (Early)': phases_dict['Phase 1 (Early)'],
-                            'P2 (Middle)': phases_dict['Phase 2 (Middle)'],
-                            'P3 (Near Expiry)': phases_dict['Phase 3 (Near Expiry)']
-                        }
+                        short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
 
+                        # Overall R² (no phase split) - same as TI vs OFI comparison
                         from scipy import stats
-                        for phase_name, phase_df in phases.items():
-                            if len(phase_df) > 2:
-                                slope, intercept, r_value, p_value, std_err = stats.linregress(
-                                    phase_df['ofi'], phase_df[dep_var]
-                                )
-                                short_name = method_name.replace('Filtered', '').replace('Trimmed', '').replace('Data', '').strip()
-                                all_summary_data.append({
-                                    'TimeWindow': tw,
-                                    'Method': short_name,
-                                    'Phase': phase_name,
-                                    'N': len(phase_df),
-                                    'Beta': slope,
-                                    'R2': r_value**2,
-                                    'p-value': p_value
-                                })
+                        slope, intercept, r_value, p_value, std_err = stats.linregress(
+                            df_clean['ofi'], df_clean[dep_var]
+                        )
+                        overall_data.append({
+                            'TimeWindow': tw,
+                            'Method': short_name,
+                            'N': len(df_clean),
+                            'Beta': slope,
+                            'R2': r_value**2,
+                            'p-value': p_value
+                        })
 
-            if all_summary_data:
-                master_df = pd.DataFrame(all_summary_data)
+                        # Phase-by-phase data (for tables 2-4)
+                        if len(df_clean) >= 150:
+                            phases_dict = split_into_phases(df_clean, split_method)
+                            phases = {
+                                'P1 (Early)': phases_dict['Phase 1 (Early)'],
+                                'P2 (Middle)': phases_dict['Phase 2 (Middle)'],
+                                'P3 (Near Expiry)': phases_dict['Phase 3 (Near Expiry)']
+                            }
 
-                # Table 1: Average R² across all phases
-                st.markdown("### 1. Average R² Across All Phases")
-                avg_r2_by_tw_method = master_df.groupby(['TimeWindow', 'Method'])['R2'].mean().reset_index()
-                pivot_avg = avg_r2_by_tw_method.pivot(index='TimeWindow', columns='Method', values='R2')
+                            for phase_name, phase_df in phases.items():
+                                if len(phase_df) > 2:
+                                    slope, intercept, r_value, p_value, std_err = stats.linregress(
+                                        phase_df['ofi'], phase_df[dep_var]
+                                    )
+                                    all_summary_data.append({
+                                        'TimeWindow': tw,
+                                        'Method': short_name,
+                                        'Phase': phase_name,
+                                        'N': len(phase_df),
+                                        'Beta': slope,
+                                        'R2': r_value**2,
+                                        'p-value': p_value
+                                    })
+
+            if overall_data:
+                overall_df = pd.DataFrame(overall_data)
+                master_df = pd.DataFrame(all_summary_data) if all_summary_data else None
+
+                # Table 1: Overall R² (no phase split - consistent with TI vs OFI comparison)
+                st.markdown("### 1. Overall R² (All Data Combined)")
+                st.caption("*Same methodology as TI vs OFI Comparison tab*")
+                pivot_overall = overall_df.pivot(index='TimeWindow', columns='Method', values='R2')
                 st.dataframe(
-                    pivot_avg.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
+                    pivot_overall.style.format('{:.4f}').background_gradient(cmap='RdYlGn', axis=None),
                     use_container_width=True,
                     height=380
                 )
 
                 # Find best overall
-                best_idx = avg_r2_by_tw_method['R2'].idxmax()
-                best_row = avg_r2_by_tw_method.loc[best_idx]
-                st.success(f"**Best Overall**: {best_row['TimeWindow']} min + {best_row['Method']} (Avg R² = {best_row['R2']:.4f})")
+                best_idx = overall_df['R2'].idxmax()
+                best_row = overall_df.loc[best_idx]
+                st.success(f"**Best Overall**: {best_row['TimeWindow']} min + {best_row['Method']} (R² = {best_row['R2']:.4f})")
 
                 # Table 2: Phase 1 (Early) only
                 st.markdown("### 2. Phase 1 (Early Market) R²")
-                p1_data = master_df[master_df['Phase'] == 'P1 (Early)']
+                if master_df is not None and len(master_df) > 0:
+                    p1_data = master_df[master_df['Phase'] == 'P1 (Early)']
+                else:
+                    p1_data = pd.DataFrame()
                 if len(p1_data) > 0:
                     pivot_p1 = p1_data.pivot(index='TimeWindow', columns='Method', values='R2')
                     st.dataframe(
@@ -2180,7 +2199,10 @@ def main():
 
                 # Table 3: Phase 2 (Middle) only
                 st.markdown("### 3. Phase 2 (Middle Market) R²")
-                p2_data = master_df[master_df['Phase'] == 'P2 (Middle)']
+                if master_df is not None and len(master_df) > 0:
+                    p2_data = master_df[master_df['Phase'] == 'P2 (Middle)']
+                else:
+                    p2_data = pd.DataFrame()
                 if len(p2_data) > 0:
                     pivot_p2 = p2_data.pivot(index='TimeWindow', columns='Method', values='R2')
                     st.dataframe(
@@ -2193,7 +2215,10 @@ def main():
 
                 # Table 4: Phase 3 (Near Expiry) only
                 st.markdown("### 4. Phase 3 (Near Expiry) R²")
-                p3_data = master_df[master_df['Phase'] == 'P3 (Near Expiry)']
+                if master_df is not None and len(master_df) > 0:
+                    p3_data = master_df[master_df['Phase'] == 'P3 (Near Expiry)']
+                else:
+                    p3_data = pd.DataFrame()
                 if len(p3_data) > 0:
                     pivot_p3 = p3_data.pivot(index='TimeWindow', columns='Method', values='R2')
                     st.dataframe(
@@ -2206,11 +2231,19 @@ def main():
 
                 # Download full results
                 st.markdown("### Download Full Results")
-                csv = master_df.to_csv(index=False)
+                if master_df is not None and len(master_df) > 0:
+                    csv = master_df.to_csv(index=False)
+                    st.download_button(
+                        label="Download Phase Results CSV",
+                        data=csv,
+                        file_name="ofi_phase_analysis.csv",
+                        mime="text/csv"
+                    )
+                csv_overall = overall_df.to_csv(index=False)
                 st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name="ofi_multi_time_analysis.csv",
+                    label="Download Overall Results CSV",
+                    data=csv_overall,
+                    file_name="ofi_overall_analysis.csv",
                     mime="text/csv"
                 )
             else:
