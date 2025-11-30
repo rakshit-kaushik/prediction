@@ -1504,7 +1504,7 @@ def render_ti_comparison(market_config, raw_ofi_df):
     """)
 
     # Create tabs for different views
-    ti_tabs = st.tabs(["81-Config Heatmaps", "TI Full Results", "Phase Comparison"])
+    ti_tabs = st.tabs(["81-Config Heatmaps", "TI Full Results", "Overall Comparison"])
 
     # ========================================================================
     # TAB 1: 81-Config Heatmaps
@@ -1748,55 +1748,37 @@ def render_ti_comparison(market_config, raw_ofi_df):
             st.metric("Not Significant", f"{not_sig}/{len(ti_df)}")
 
     # ========================================================================
-    # TAB 3: Phase Comparison (Original View)
+    # TAB 3: Overall Comparison (OFI vs TI vs Volume)
     # ========================================================================
     with ti_tabs[2]:
-        st.subheader("3-Phase Comparison (45-min, Z-Score)")
+        st.subheader("Overall Comparison: OFI vs TI vs Volume")
         st.markdown("*Fixed config: 45-min time window | Z-Score (3σ) outlier removal*")
+        st.markdown("*Per Cont et al. (2014) methodology*")
 
-        # Load DOME trade data (262K+ trades)
-        dome_file = DATA_DIR.parent / "DOME_zohran-oct-15_2025-11-29.csv"
-        if not dome_file.exists():
-            st.warning("DOME trade data not found. Please ensure DOME_zohran-oct-15_2025-11-29.csv exists.")
+        # Load pre-computed TI data (small file, ~37KB)
+        ti_file = DATA_DIR / "ti_aggregated_45min.csv"
+        if not ti_file.exists():
+            st.warning("Pre-computed TI data not found. Run: `python data_pipeline/05_precompute_ti_windows.py`")
             return
 
-        trades_df = pd.read_csv(dome_file)
-        trades_df['timestamp'] = pd.to_datetime(trades_df['block_timestamp'], utc=True)
-        # Normalize shares (divide by 1e6)
-        trades_df['shares_normalized'] = trades_df['shares'] / 1e6
-        # Create direction: +1 for BUY, -1 for SELL
-        trades_df['direction'] = np.where(trades_df['side'] == 'BUY', 1, -1)
-
-        st.success(f"Loaded {len(raw_ofi_df):,} OFI records and {len(trades_df):,} DOME trades")
+        ti_agg = pd.read_csv(ti_file)
+        ti_agg['timestamp'] = pd.to_datetime(ti_agg['timestamp'], utc=True)
 
         # Fixed configuration
         TIME_WINDOW_PHASE = 45
         TIME_WINDOW_STR = f'{TIME_WINDOW_PHASE}min'
 
-        # Aggregate
+        # Aggregate OFI data
         ofi_agg = aggregate_ofi_data(raw_ofi_df.copy(), TIME_WINDOW_STR)
 
-        # Aggregate trades for TI
-        trades_df_copy = trades_df.copy()
-        trades_df_copy = trades_df_copy.sort_values('timestamp').reset_index(drop=True)
-        trades_df_copy['time_bin'] = trades_df_copy['timestamp'].dt.floor(TIME_WINDOW_STR)
-        trades_df_copy['signed_volume'] = trades_df_copy['direction'] * trades_df_copy['shares_normalized']
-
-        ti_agg = trades_df_copy.groupby('time_bin').agg({
-            'signed_volume': 'sum',
-            'shares_normalized': 'sum',
-            'direction': 'count'
-        }).reset_index()
-        ti_agg.columns = ['timestamp', 'trade_imbalance', 'total_volume', 'num_trades']
-
-        if ofi_agg is None or ti_agg is None:
-            st.error("Could not aggregate data")
+        if ofi_agg is None:
+            st.error("Could not aggregate OFI data")
             return
 
-        # Merge
-        merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='left')
-        merged['trade_imbalance'] = merged['trade_imbalance'].fillna(0)
-        merged['total_volume'] = merged['total_volume'].fillna(0)
+        st.success(f"Loaded {len(ofi_agg):,} OFI windows and {len(ti_agg):,} TI windows")
+
+        # Merge OFI and TI
+        merged = pd.merge(ofi_agg, ti_agg, on='timestamp', how='inner')
         merged = merged.dropna(subset=['ofi', 'delta_mid_price_ticks'])
 
         # Apply Z-score filtering
@@ -1804,147 +1786,123 @@ def render_ti_comparison(market_config, raw_ofi_df):
 
         st.caption(f"After filtering: {len(merged)} observations")
 
-        # Split into 3 phases
-        n = len(merged)
-        phase_size = n // 3
+        # ---- Calculate Overall Metrics ----
 
-        phases = {
-            'Early': merged.iloc[:phase_size].copy(),
-            'Middle': merged.iloc[phase_size:2*phase_size].copy(),
-            'Near Expiry': merged.iloc[2*phase_size:].copy()
-        }
-
-        # Calculate R² for each phase
-        results = []
-        for phase_name, phase_df in phases.items():
-            if len(phase_df) < 10:
-                continue
-
-            # OFI regression
-            ofi_clean = phase_df.dropna(subset=['ofi', 'delta_mid_price_ticks'])
-            if len(ofi_clean) >= 3:
-                slope_ofi, _, r_ofi, p_ofi, _ = stats.linregress(
-                    ofi_clean['ofi'], ofi_clean['delta_mid_price_ticks']
-                )
-            else:
-                continue
-
-            # TI regression
-            ti_clean = phase_df.dropna(subset=['trade_imbalance', 'delta_mid_price_ticks'])
-            if len(ti_clean) >= 3:
-                slope_ti, _, r_ti, p_ti, _ = stats.linregress(
-                    ti_clean['trade_imbalance'], ti_clean['delta_mid_price_ticks']
-                )
-            else:
-                continue
-
-            # |OFI| regression (per Cont et al. Table 5: |ΔP| = α + β*|OFI| + ε)
-            ofi_abs_clean = phase_df.dropna(subset=['ofi', 'delta_mid_price_ticks'])
-            if len(ofi_abs_clean) >= 3:
-                slope_ofi_abs, _, r_ofi_abs, p_ofi_abs, _ = stats.linregress(
-                    ofi_abs_clean['ofi'].abs(),
-                    ofi_abs_clean['delta_mid_price_ticks'].abs()
-                )
-            else:
-                r_ofi_abs = 0
-
-            # Estimate exponent H via log-log regression (per Cont et al. eq. 16)
-            # log|ΔP| = log(θ) + H * log(VOL) + log(ξ)
-            vol_for_H = phase_df.dropna(subset=['total_volume', 'delta_mid_price_ticks'])
-            H_estimate = 0.5  # Default to square-root
-            if len(vol_for_H) >= 10:
-                # Filter out zeros for log
-                mask = (vol_for_H['total_volume'] > 0) & (vol_for_H['delta_mid_price_ticks'].abs() > 0)
-                vol_log = vol_for_H[mask]
-                if len(vol_log) >= 10:
-                    log_vol = np.log(vol_log['total_volume'])
-                    log_abs_price = np.log(vol_log['delta_mid_price_ticks'].abs())
-                    H_estimate = stats.linregress(log_vol, log_abs_price).slope
-
-            # Volume regression with exponent H: |ΔP| = α + β * VOL^H + ε
-            vol_clean = phase_df.dropna(subset=['total_volume', 'delta_mid_price_ticks'])
-            if len(vol_clean) >= 3:
-                vol_H = np.power(vol_clean['total_volume'] + 1e-10, H_estimate)
-                slope_vol, _, r_vol, p_vol, _ = stats.linregress(
-                    vol_H, vol_clean['delta_mid_price_ticks'].abs()
-                )
-            else:
-                r_vol = 0
-
-            results.append({
-                'Phase': phase_name,
-                'N': len(phase_df),
-                'OFI R²': r_ofi ** 2,
-                'OFI β': slope_ofi,
-                'OFI p': p_ofi,
-                '|OFI| R²': r_ofi_abs ** 2 if r_ofi_abs else 0,
-                'TI R²': r_ti ** 2,
-                'TI β': slope_ti,
-                'TI p': p_ti,
-                'Vol R²': r_vol ** 2 if r_vol else 0,
-                'Vol H': H_estimate,
-                'Winner': 'OFI' if r_ofi ** 2 > r_ti ** 2 else 'TI'
-            })
-
-        if not results:
-            st.error("Not enough data for phase comparison")
+        # 1. OFI regression: ΔP = α + β*OFI + ε (signed)
+        ofi_clean = merged.dropna(subset=['ofi', 'delta_mid_price_ticks'])
+        if len(ofi_clean) >= 3:
+            slope_ofi, intercept_ofi, r_ofi, p_ofi, se_ofi = stats.linregress(
+                ofi_clean['ofi'], ofi_clean['delta_mid_price_ticks']
+            )
+        else:
+            st.error("Not enough OFI data")
             return
 
-        results_df = pd.DataFrame(results)
+        # 2. |OFI| regression: |ΔP| = α + β*|OFI| + ε (Table 5 style)
+        if len(ofi_clean) >= 3:
+            slope_ofi_abs, _, r_ofi_abs, p_ofi_abs, _ = stats.linregress(
+                ofi_clean['ofi'].abs(),
+                ofi_clean['delta_mid_price_ticks'].abs()
+            )
+        else:
+            r_ofi_abs = 0
 
-        # Display results
-        st.dataframe(
-            results_df.style.format({
-                'OFI R²': '{:.4f}',
-                'OFI β': '{:.2e}',
-                'OFI p': '{:.2e}',
-                '|OFI| R²': '{:.4f}',
-                'TI R²': '{:.4f}',
-                'TI β': '{:.2e}',
-                'TI p': '{:.2e}',
-                'Vol R²': '{:.4f}',
-                'Vol H': '{:.3f}'
-            }).apply(lambda x: ['background-color: #d4edda' if v == 'OFI' else 'background-color: #f8d7da'
-                               for v in x] if x.name == 'Winner' else [''] * len(x), axis=0),
-            use_container_width=True
-        )
+        # 3. TI regression: ΔP = α + β*TI + ε (signed)
+        ti_clean = merged.dropna(subset=['trade_imbalance', 'delta_mid_price_ticks'])
+        if len(ti_clean) >= 3:
+            slope_ti, intercept_ti, r_ti, p_ti, se_ti = stats.linregress(
+                ti_clean['trade_imbalance'], ti_clean['delta_mid_price_ticks']
+            )
+        else:
+            r_ti = 0
+            slope_ti = 0
+            p_ti = 1
 
-        # Bar chart
+        # 4. Volume regression with exponent H (per Cont et al. eq. 16-17)
+        vol_clean = merged.dropna(subset=['total_volume', 'delta_mid_price_ticks'])
+        H_estimate = 0.5  # Default
+
+        if len(vol_clean) >= 10:
+            # Estimate H via log-log regression
+            mask = (vol_clean['total_volume'] > 0) & (vol_clean['delta_mid_price_ticks'].abs() > 0)
+            vol_log = vol_clean[mask]
+            if len(vol_log) >= 10:
+                log_vol = np.log(vol_log['total_volume'])
+                log_abs_price = np.log(vol_log['delta_mid_price_ticks'].abs())
+                H_estimate = stats.linregress(log_vol, log_abs_price).slope
+
+        if len(vol_clean) >= 3:
+            vol_H = np.power(vol_clean['total_volume'] + 1e-10, H_estimate)
+            slope_vol, _, r_vol, p_vol, _ = stats.linregress(
+                vol_H, vol_clean['delta_mid_price_ticks'].abs()
+            )
+        else:
+            r_vol = 0
+            p_vol = 1
+
+        # ---- Display Results ----
+        st.markdown("### Regression Results")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("OFI R²", f"{r_ofi**2:.4f}", help="Signed OFI: ΔP = α + β*OFI")
+            st.caption(f"β = {slope_ofi:.2e}")
+            st.caption(f"p = {p_ofi:.2e}")
+
+        with col2:
+            st.metric("|OFI| R²", f"{r_ofi_abs**2:.4f}", help="Absolute OFI: |ΔP| = α + β*|OFI|")
+            st.caption(f"(Table 5 style)")
+
+        with col3:
+            st.metric("TI R²", f"{r_ti**2:.4f}", help="Trade Imbalance: ΔP = α + β*TI")
+            st.caption(f"β = {slope_ti:.2e}")
+            st.caption(f"p = {p_ti:.2e}")
+
+        with col4:
+            st.metric("Vol R²", f"{r_vol**2:.4f}", help=f"Volume: |ΔP| = α + β*VOL^H")
+            st.caption(f"H = {H_estimate:.3f}")
+            st.caption(f"p = {p_vol:.2e}")
+
+        # Bar chart comparison
         fig = go.Figure()
+        metrics = ['OFI', '|OFI|', 'TI', 'Volume']
+        r2_values = [r_ofi**2, r_ofi_abs**2, r_ti**2, r_vol**2]
+        colors = ['#2E86AB', '#A23B72', '#06A77D', '#F18F01']
+
         fig.add_trace(go.Bar(
-            x=results_df['Phase'],
-            y=results_df['OFI R²'],
-            name='OFI',
-            marker_color='#2E86AB',
-            text=[f"{r:.4f}" for r in results_df['OFI R²']],
+            x=metrics,
+            y=r2_values,
+            marker_color=colors,
+            text=[f"{r:.4f}" for r in r2_values],
             textposition='outside'
         ))
-        fig.add_trace(go.Bar(
-            x=results_df['Phase'],
-            y=results_df['TI R²'],
-            name='Trade Imbalance',
-            marker_color='#06A77D',
-            text=[f"{r:.4f}" for r in results_df['TI R²']],
-            textposition='outside'
-        ))
+
         fig.update_layout(
-            title="R² Comparison: OFI vs TI by Phase (45-min, Z-score filtered)",
-            xaxis_title="Phase",
+            title="R² Comparison: OFI vs TI vs Volume (45-min, Z-score filtered)",
+            xaxis_title="Metric",
             yaxis_title="R²",
-            barmode='group',
-            height=450
+            height=400,
+            showlegend=False
         )
         st.plotly_chart(fig, use_container_width=True)
 
         # Summary
-        avg_ofi_r2 = results_df['OFI R²'].mean()
-        avg_ti_r2 = results_df['TI R²'].mean()
-
         st.markdown("---")
-        if avg_ofi_r2 > avg_ti_r2:
-            st.success(f"**OFI outperforms TI** (Avg R²: OFI={avg_ofi_r2:.4f} vs TI={avg_ti_r2:.4f})")
+        st.markdown("### Summary")
+
+        winner = 'OFI' if r_ofi**2 > r_ti**2 else 'TI'
+        if winner == 'OFI':
+            st.success(f"**OFI outperforms TI** (R²: OFI={r_ofi**2:.4f} vs TI={r_ti**2:.4f})")
         else:
-            st.warning(f"**TI outperforms OFI** (Avg R²: TI={avg_ti_r2:.4f} vs OFI={avg_ofi_r2:.4f})")
+            st.warning(f"**TI outperforms OFI** (R²: TI={r_ti**2:.4f} vs OFI={r_ofi**2:.4f})")
+
+        st.info(f"""
+        **Per Cont et al. (2014) Section 4.2:**
+        - Volume alone has very low R² ({r_vol**2:.4f}) - consistent with paper's finding
+        - Exponent H = {H_estimate:.3f} (paper found H < 0.5 typically)
+        - OFI captures queue dynamics that volume misses
+        """)
 
 
 # ============================================================================
