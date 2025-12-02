@@ -2035,6 +2035,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
 
     # Create tabs for different visualization sections
     pres_tabs = st.tabs([
+        "Price Evolution",
         "OFI Heatmaps",
         "OFI Scatter Plots",
         "TI Comparison",
@@ -2042,9 +2043,63 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
     ])
 
     # ========================================================================
-    # TAB 1: OFI Heatmaps (Overall + 3 phases) - 3×3 subset
+    # TAB 0: Price Evolution (Mid Price over time)
     # ========================================================================
     with pres_tabs[0]:
+        st.subheader("Price Evolution")
+        st.markdown("*Mid price over the trading period with phase boundaries*")
+
+        # Aggregate to 10-min for cleaner visualization
+        price_df = aggregate_ofi_data(raw_ofi_df.copy(), '10min')
+        price_df = filter_by_date(price_df, start_datetime, end_datetime)
+
+        if price_df is not None and len(price_df) > 0:
+            # Calculate phase boundaries (by snapshot count)
+            total = len(price_df)
+            third = total // 3
+            phase1_end = price_df.iloc[third - 1]['timestamp']
+            phase2_end = price_df.iloc[2*third - 1]['timestamp']
+
+            fig_price = go.Figure()
+
+            # Add mid price line
+            fig_price.add_trace(go.Scatter(
+                x=price_df['timestamp'],
+                y=price_df['mid_price'],
+                mode='lines',
+                line=dict(color='#2E86AB', width=2),
+                name='Mid Price'
+            ))
+
+            # Add phase boundary lines
+            fig_price.add_vline(x=phase1_end, line_dash="dash", line_color="gray", line_width=1)
+            fig_price.add_vline(x=phase2_end, line_dash="dash", line_color="gray", line_width=1)
+
+            # Add phase labels
+            fig_price.add_annotation(x=price_df.iloc[third//2]['timestamp'], y=price_df['mid_price'].max(),
+                                     text="Phase 1<br>(Early)", showarrow=False, font=dict(size=10, color='black'))
+            fig_price.add_annotation(x=price_df.iloc[third + third//2]['timestamp'], y=price_df['mid_price'].max(),
+                                     text="Phase 2<br>(Middle)", showarrow=False, font=dict(size=10, color='black'))
+            fig_price.add_annotation(x=price_df.iloc[2*third + (total-2*third)//2]['timestamp'], y=price_df['mid_price'].max(),
+                                     text="Phase 3<br>(Near Expiry)", showarrow=False, font=dict(size=10, color='black'))
+
+            fig_price.update_layout(
+                title="Mid Price Over Trading Period",
+                xaxis_title="Date",
+                yaxis_title="Mid Price ($)",
+                height=450,
+                showlegend=False
+            )
+            fig_price = apply_white_background(fig_price)
+            fig_price.update_layout(width=plot_width)
+            st.plotly_chart(fig_price, use_container_width=False, key="price_evolution")
+        else:
+            st.warning("No price data available")
+
+    # ========================================================================
+    # TAB 1: OFI Heatmaps (Overall + 3 phases) - 3×3 subset
+    # ========================================================================
+    with pres_tabs[1]:
         st.subheader("OFI R² Heatmaps (3×3 Configuration)")
         st.markdown("*Time Windows: 15, 45, 90 min | Outlier Methods: Raw, Abs (200k), Z-Score*")
 
@@ -2111,7 +2166,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
     # ========================================================================
     # TAB 2: OFI Scatter Plots (45-min, Z-Score by phase)
     # ========================================================================
-    with pres_tabs[1]:
+    with pres_tabs[2]:
         st.subheader("OFI Price Impact Scatter Plots")
         st.markdown("*Configuration: 45-minute window, Z-Score outlier removal*")
 
@@ -2239,7 +2294,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
     # ========================================================================
     # TAB 3: TI Comparison
     # ========================================================================
-    with pres_tabs[2]:
+    with pres_tabs[3]:
         st.subheader("Trade Imbalance (TI) Comparison")
         st.markdown("*Comparing OFI vs TI across 3×3 configuration*")
 
@@ -2321,7 +2376,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
     # ========================================================================
     # TAB 4: Summary Charts
     # ========================================================================
-    with pres_tabs[3]:
+    with pres_tabs[4]:
         st.subheader("Summary Comparison Charts")
         st.markdown("*Final comparison: OFI vs |OFI| vs TI vs Volume (45-min, Z-Score)*")
 
