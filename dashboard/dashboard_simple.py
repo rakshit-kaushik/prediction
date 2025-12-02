@@ -1945,15 +1945,26 @@ def apply_white_background(fig):
             linecolor='black',
             linewidth=1,
             mirror=True,
-            tickfont=dict(color='black')
+            tickfont=dict(color='black', size=11),
+            title_font=dict(color='black', size=12)
         ),
         yaxis=dict(
             gridcolor='lightgray',
             linecolor='black',
             linewidth=1,
             mirror=True,
-            tickfont=dict(color='black')
+            tickfont=dict(color='black', size=11),
+            title_font=dict(color='black', size=12)
+        ),
+        coloraxis_colorbar=dict(
+            tickfont=dict(color='black'),
+            title_font=dict(color='black')
         )
+    )
+    # Also update any colorbar on traces
+    fig.update_coloraxes(
+        colorbar_tickfont=dict(color='black'),
+        colorbar_title_font=dict(color='black')
     )
     return fig
 
