@@ -1930,7 +1930,7 @@ def render_ti_comparison(market_config, raw_ofi_df):
 
 # Subset configurations for presentation
 PRESENTATION_TIME_WINDOWS = [15, 45, 90]  # 3 time windows
-PRESENTATION_OUTLIER_METHODS = ['Raw', 'Abs (200k)', 'Z-Score (3)']  # 3 outlier methods
+PRESENTATION_OUTLIER_METHODS = ['Raw', 'Z-Score (3)', 'Abs (200k)']  # 3 outlier methods
 
 
 def apply_white_background(fig):
