@@ -1975,6 +1975,13 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
     *Use the camera icon (📷) on each plot to download as PNG*
     """)
 
+    # Width control for poster sizing
+    col_ctrl1, col_ctrl2 = st.columns([1, 3])
+    with col_ctrl1:
+        plot_width = st.slider("Plot Width (px)", min_value=300, max_value=1200, value=600, step=50)
+    with col_ctrl2:
+        st.caption(f"Current width: {plot_width}px - Adjust to fit your poster")
+
     # Load pre-computed data
     phase_df = None
     ofi_81_df = None
@@ -2051,7 +2058,8 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             height=350
         )
         fig_overall = apply_white_background(fig_overall)
-        st.plotly_chart(fig_overall, use_container_width=True, key="overall_heatmap")
+        fig_overall.update_layout(width=plot_width)
+        st.plotly_chart(fig_overall, use_container_width=False, key="overall_heatmap")
 
         # 2-4. Phase Heatmaps
         phases = ["Phase 1 (Early)", "Phase 2 (Middle)", "Phase 3 (Near Expiry)"]
@@ -2086,7 +2094,8 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 height=350
             )
             fig_phase = apply_white_background(fig_phase)
-            st.plotly_chart(fig_phase, use_container_width=True, key=f"phase_{i}_heatmap")
+            fig_phase.update_layout(width=plot_width)
+            st.plotly_chart(fig_phase, use_container_width=False, key=f"phase_{i}_heatmap")
 
     # ========================================================================
     # TAB 2: OFI Scatter Plots (45-min, Z-Score by phase)
@@ -2180,7 +2189,8 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                     showlegend=False
                 )
                 fig = apply_white_background(fig)
-                st.plotly_chart(fig, use_container_width=True, key=f"scatter_{i}")
+                fig.update_layout(width=plot_width)
+                st.plotly_chart(fig, use_container_width=False, key=f"scatter_{i}")
 
             # R² by Phase bar chart
             st.markdown("### R² Progression Across Phases")
@@ -2212,7 +2222,8 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 showlegend=False
             )
             fig_r2 = apply_white_background(fig_r2)
-            st.plotly_chart(fig_r2, use_container_width=True, key="r2_progression")
+            fig_r2.update_layout(width=plot_width)
+            st.plotly_chart(fig_r2, use_container_width=False, key="r2_progression")
 
     # ========================================================================
     # TAB 3: TI Comparison
@@ -2253,7 +2264,8 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 height=350
             )
             fig_ti = apply_white_background(fig_ti)
-            st.plotly_chart(fig_ti, use_container_width=True, key="ti_heatmap")
+            fig_ti.update_layout(width=plot_width)
+            st.plotly_chart(fig_ti, use_container_width=False, key="ti_heatmap")
 
             # Side-by-side comparison
             st.markdown("### 2. OFI vs TI Side-by-Side")
@@ -2272,9 +2284,9 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                     textfont={"size": 12, "color": "black"},
                     colorbar=dict(title="R² (%)")
                 ))
-                fig_ofi_side.update_layout(title="OFI", height=300)
+                fig_ofi_side.update_layout(title="OFI", height=300, width=plot_width//2)
                 fig_ofi_side = apply_white_background(fig_ofi_side)
-                st.plotly_chart(fig_ofi_side, use_container_width=True, key="ofi_side")
+                st.plotly_chart(fig_ofi_side, use_container_width=False, key="ofi_side")
 
             with col2:
                 st.markdown("**TI R² (0-1% scale)**")
@@ -2289,9 +2301,9 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                     textfont={"size": 12, "color": "black"},
                     colorbar=dict(title="R² (%)")
                 ))
-                fig_ti_side.update_layout(title="TI", height=300)
+                fig_ti_side.update_layout(title="TI", height=300, width=plot_width//2)
                 fig_ti_side = apply_white_background(fig_ti_side)
-                st.plotly_chart(fig_ti_side, use_container_width=True, key="ti_side")
+                st.plotly_chart(fig_ti_side, use_container_width=False, key="ti_side")
 
             st.success("**Key Finding:** OFI R² ranges from 15-35% while TI R² is <1% across all configurations")
 
@@ -2327,7 +2339,8 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 showlegend=False
             )
             fig_compare = apply_white_background(fig_compare)
-            st.plotly_chart(fig_compare, use_container_width=True, key="compare_bar")
+            fig_compare.update_layout(width=plot_width)
+            st.plotly_chart(fig_compare, use_container_width=False, key="compare_bar")
 
             # Results table
             st.markdown("### Detailed Results Table")
