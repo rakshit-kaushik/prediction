@@ -2378,7 +2378,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
     # ========================================================================
     with pres_tabs[4]:
         st.subheader("Summary Comparison Charts")
-        st.markdown("*Final comparison: OFI vs TI (45-min, Z-Score configuration)*")
+        st.markdown("*Final comparison: OFI vs |OFI| vs TI vs Volume*")
 
         # Get consistent 45-min Z-Score values from per-config data
         ofi_45_zscore = ofi_81_df[
@@ -2390,34 +2390,40 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             (ti_81_df['outlier_method'] == 'Z-Score (3)')
         ] if ti_81_df is not None else None
 
-        if len(ofi_45_zscore) > 0:
+        if len(ofi_45_zscore) > 0 and overall_df is not None:
+            # Get OFI and TI from consistent 45-min Z-Score config
             ofi_r2 = ofi_45_zscore['r_squared'].values[0]
             ofi_beta = ofi_45_zscore['beta'].values[0]
             ofi_pval = ofi_45_zscore['p_value'].values[0]
             ofi_n = ofi_45_zscore['n_windows'].values[0]
 
             ti_r2 = ti_45_zscore['r_squared'].values[0] if ti_45_zscore is not None and len(ti_45_zscore) > 0 else 0
-            ti_beta = ti_45_zscore['beta'].values[0] if ti_45_zscore is not None and len(ti_45_zscore) > 0 else 0
-            ti_pval = ti_45_zscore['p_value'].values[0] if ti_45_zscore is not None and len(ti_45_zscore) > 0 else 1
+
+            # Get |OFI| and Volume from overall comparison
+            ofi_abs_row = overall_df[overall_df['metric'] == '|OFI| (absolute)']
+            volume_row = overall_df[overall_df['metric'] == 'Volume']
+
+            ofi_abs_r2 = ofi_abs_row['r_squared'].values[0] if len(ofi_abs_row) > 0 else 0
+            volume_r2 = volume_row['r_squared'].values[0] if len(volume_row) > 0 else 0
 
             # Comparison bar chart
-            st.markdown("### R² Comparison (45-min, Z-Score)")
+            st.markdown("### R² Comparison")
 
-            metrics = ['OFI (signed)', 'TI (signed)']
-            r2_values = [ofi_r2, ti_r2]
-            colors = ['#2E86AB', '#06A77D']
+            metrics = ['OFI (signed)', '|OFI| (absolute)', 'TI (signed)', 'Volume']
+            r2_values = [ofi_r2, ofi_abs_r2, ti_r2, volume_r2]
+            colors = ['#2E86AB', '#A23B72', '#06A77D', '#F18F01']
 
             fig_compare = go.Figure()
             fig_compare.add_trace(go.Bar(
                 x=metrics,
                 y=[r * 100 for r in r2_values],
                 marker_color=colors,
-                text=[f"{r*100:.2f}%" for r in r2_values],
+                text=[f"{r*100:.1f}%" for r in r2_values],
                 textposition='outside',
                 textfont=dict(size=14, color='black')
             ))
             fig_compare.update_layout(
-                title="R² Comparison: OFI vs TI (45-min, Z-Score)",
+                title="R² Comparison: OFI Dominates All Other Metrics",
                 xaxis_title="Metric",
                 yaxis_title="R² (%)",
                 height=450,
@@ -2428,29 +2434,27 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             st.plotly_chart(fig_compare, use_container_width=False, key="compare_bar")
 
             # Results table
-            st.markdown("### Detailed Results Table (45-min, Z-Score)")
+            st.markdown("### Detailed Results Table")
+            st.caption("*OFI and TI use 45-min Z-Score config; |OFI| and Volume use overall regression*")
 
             results_data = pd.DataFrame({
-                'Metric': ['OFI (signed)', 'TI (signed)'],
-                'R²': [f"{ofi_r2*100:.2f}%", f"{ti_r2*100:.2f}%"],
-                'β': [f"{ofi_beta:.2e}", f"{ti_beta:.2e}"],
-                'p-value': [f"{ofi_pval:.2e}" if ofi_pval < 0.001 else f"{ofi_pval:.4f}",
-                           f"{ti_pval:.2e}" if ti_pval < 0.001 else f"{ti_pval:.4f}"],
-                'n': [int(ofi_n), int(ofi_n)],
-                'Model': ['ΔP = α + β×OFI', 'ΔP = α + β×TI']
+                'Metric': metrics,
+                'R²': [f"{r*100:.2f}%" for r in r2_values],
+                'Model': ['ΔP = α + β×OFI', '|ΔP| = α + β×|OFI|', 'ΔP = α + β×TI', '|ΔP| = α + β×Vol^H']
             })
 
             st.dataframe(results_data, use_container_width=True, hide_index=True)
 
             st.success(f"""
-            **Key Takeaways (45-min, Z-Score configuration):**
-            - **OFI ({ofi_r2*100:.1f}%)** dramatically outperforms TI
+            **Key Takeaways:**
+            - **OFI ({ofi_r2*100:.1f}%)** dramatically outperforms all other metrics
+            - **|OFI| ({ofi_abs_r2*100:.1f}%)** also shows strong explanatory power
             - **TI ({ti_r2*100:.2f}%)** has minimal explanatory power
-            - OFI explains **{ofi_r2/ti_r2:.0f}×** more variance than TI
+            - **Volume ({volume_r2*100:.1f}%)** is also a poor predictor
             - OFI captures order book dynamics that trade-based metrics miss
             """)
         else:
-            st.warning("Overall comparison data not found. Run the export script first.")
+            st.warning("Data not found. Run the export script first.")
 
 
 # ============================================================================
