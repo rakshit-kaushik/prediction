@@ -1958,42 +1958,22 @@ def apply_white_background(fig):
     return fig
 
 
-def create_download_button(fig, filename, key):
-    """Create a download button for a plotly figure"""
-    import io
-    import base64
-
-    # Convert to PNG bytes
-    img_bytes = fig.to_image(format="png", scale=3, width=800, height=600)
-
-    # Create download button
-    b64 = base64.b64encode(img_bytes).decode()
-    href = f'<a href="data:image/png;base64,{b64}" download="{filename}">📥 Download {filename}</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-
 def render_presentation(market_config, raw_ofi_df, split_method, start_datetime, end_datetime):
     """Render the Presentation tab with white-background plots for poster
 
     Features:
     - White background for all plots (poster-ready)
     - 3×3 configuration subset (15, 45, 90 min × Raw, Abs (200k), Z-Score)
-    - PNG export buttons for each plot
+    - Use camera icon on each plot to download as PNG
     """
-    st.header("📊 Presentation Mode")
+    st.header("Presentation Mode")
     st.markdown("""
     **Poster-ready plots with white backgrounds**
 
     Configuration: 3 Time Windows (15, 45, 90 min) × 3 Outlier Methods (Raw, Abs 200k, Z-Score)
-    """)
 
-    # Check if kaleido is available for PNG export
-    try:
-        import kaleido
-        has_kaleido = True
-    except ImportError:
-        has_kaleido = False
-        st.warning("⚠️ Install `kaleido` for PNG export: `pip install kaleido`")
+    *Use the camera icon (📷) on each plot to download as PNG*
+    """)
 
     # Load pre-computed data
     phase_df = None
@@ -2062,7 +2042,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             texttemplate="%{text}",
             textfont={"size": 14, "color": "black"},
             hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
-            colorbar=dict(title="R² (%)", tickfont=dict(color='black'), titlefont=dict(color='black'))
+            colorbar=dict(title=dict(text="R² (%)", font=dict(color='black')), tickfont=dict(color='black'))
         ))
         fig_overall.update_layout(
             title="OFI R² (%) - Overall Market",
@@ -2072,9 +2052,6 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
         )
         fig_overall = apply_white_background(fig_overall)
         st.plotly_chart(fig_overall, use_container_width=True, key="overall_heatmap")
-
-        if has_kaleido:
-            create_download_button(fig_overall, "ofi_overall_heatmap.png", "dl_overall")
 
         # 2-4. Phase Heatmaps
         phases = ["Phase 1 (Early)", "Phase 2 (Middle)", "Phase 3 (Near Expiry)"]
@@ -2100,7 +2077,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 texttemplate="%{text}",
                 textfont={"size": 14, "color": "black"},
                 hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
-                colorbar=dict(title="R² (%)", tickfont=dict(color='black'), titlefont=dict(color='black'))
+                colorbar=dict(title=dict(text="R² (%)", font=dict(color='black')), tickfont=dict(color='black'))
             ))
             fig_phase.update_layout(
                 title=f"OFI R² (%) - {title}",
@@ -2110,9 +2087,6 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             )
             fig_phase = apply_white_background(fig_phase)
             st.plotly_chart(fig_phase, use_container_width=True, key=f"phase_{i}_heatmap")
-
-            if has_kaleido:
-                create_download_button(fig_phase, f"ofi_phase{i+1}_heatmap.png", f"dl_phase_{i}")
 
     # ========================================================================
     # TAB 2: OFI Scatter Plots (45-min, Z-Score by phase)
@@ -2208,9 +2182,6 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 fig = apply_white_background(fig)
                 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{i}")
 
-                if has_kaleido:
-                    create_download_button(fig, f"ofi_scatter_phase{i+1}.png", f"dl_scatter_{i}")
-
             # R² by Phase bar chart
             st.markdown("### R² Progression Across Phases")
 
@@ -2243,9 +2214,6 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             fig_r2 = apply_white_background(fig_r2)
             st.plotly_chart(fig_r2, use_container_width=True, key="r2_progression")
 
-            if has_kaleido:
-                create_download_button(fig_r2, "r2_by_phase.png", "dl_r2_phase")
-
     # ========================================================================
     # TAB 3: TI Comparison
     # ========================================================================
@@ -2276,7 +2244,7 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
                 texttemplate="%{text}",
                 textfont={"size": 14, "color": "black"},
                 hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
-                colorbar=dict(title="R² (%)", tickfont=dict(color='black'), titlefont=dict(color='black'))
+                colorbar=dict(title=dict(text="R² (%)", font=dict(color='black')), tickfont=dict(color='black'))
             ))
             fig_ti.update_layout(
                 title="TI R² (%) - Trade Imbalance vs Price Change",
@@ -2286,9 +2254,6 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             )
             fig_ti = apply_white_background(fig_ti)
             st.plotly_chart(fig_ti, use_container_width=True, key="ti_heatmap")
-
-            if has_kaleido:
-                create_download_button(fig_ti, "ti_heatmap.png", "dl_ti")
 
             # Side-by-side comparison
             st.markdown("### 2. OFI vs TI Side-by-Side")
@@ -2363,9 +2328,6 @@ def render_presentation(market_config, raw_ofi_df, split_method, start_datetime,
             )
             fig_compare = apply_white_background(fig_compare)
             st.plotly_chart(fig_compare, use_container_width=True, key="compare_bar")
-
-            if has_kaleido:
-                create_download_button(fig_compare, "comparison_bar.png", "dl_compare")
 
             # Results table
             st.markdown("### Detailed Results Table")
