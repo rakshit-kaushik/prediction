@@ -1925,6 +1925,480 @@ def render_ti_comparison(market_config, raw_ofi_df):
 
 
 # ============================================================================
+# PRESENTATION TAB (White background plots for poster)
+# ============================================================================
+
+# Subset configurations for presentation
+PRESENTATION_TIME_WINDOWS = [15, 45, 90]  # 3 time windows
+PRESENTATION_OUTLIER_METHODS = ['Raw', 'Abs (200k)', 'Z-Score (3)']  # 3 outlier methods
+
+
+def apply_white_background(fig):
+    """Apply white background styling for poster-ready plots"""
+    fig.update_layout(
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(color='black', size=12),
+        title_font=dict(color='black', size=14),
+        xaxis=dict(
+            gridcolor='lightgray',
+            linecolor='black',
+            linewidth=1,
+            mirror=True,
+            tickfont=dict(color='black')
+        ),
+        yaxis=dict(
+            gridcolor='lightgray',
+            linecolor='black',
+            linewidth=1,
+            mirror=True,
+            tickfont=dict(color='black')
+        )
+    )
+    return fig
+
+
+def create_download_button(fig, filename, key):
+    """Create a download button for a plotly figure"""
+    import io
+    import base64
+
+    # Convert to PNG bytes
+    img_bytes = fig.to_image(format="png", scale=3, width=800, height=600)
+
+    # Create download button
+    b64 = base64.b64encode(img_bytes).decode()
+    href = f'<a href="data:image/png;base64,{b64}" download="{filename}">📥 Download {filename}</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
+
+def render_presentation(market_config, raw_ofi_df, split_method, start_datetime, end_datetime):
+    """Render the Presentation tab with white-background plots for poster
+
+    Features:
+    - White background for all plots (poster-ready)
+    - 3×3 configuration subset (15, 45, 90 min × Raw, Abs (200k), Z-Score)
+    - PNG export buttons for each plot
+    """
+    st.header("📊 Presentation Mode")
+    st.markdown("""
+    **Poster-ready plots with white backgrounds**
+
+    Configuration: 3 Time Windows (15, 45, 90 min) × 3 Outlier Methods (Raw, Abs 200k, Z-Score)
+    """)
+
+    # Check if kaleido is available for PNG export
+    try:
+        import kaleido
+        has_kaleido = True
+    except ImportError:
+        has_kaleido = False
+        st.warning("⚠️ Install `kaleido` for PNG export: `pip install kaleido`")
+
+    # Load pre-computed data
+    phase_df = None
+    ofi_81_df = None
+    ti_81_df = None
+    overall_df = None
+
+    phase_file = DATA_DIR / "ofi_phase_analysis.csv"
+    ofi_81_file = DATA_DIR / "ofi_81_configs.csv"
+    ti_81_file = DATA_DIR / "ti_81_configs.csv"
+    overall_file = DATA_DIR / "overall_comparison.csv"
+
+    if phase_file.exists():
+        phase_df = pd.read_csv(phase_file)
+    if ofi_81_file.exists():
+        ofi_81_df = pd.read_csv(ofi_81_file)
+    if ti_81_file.exists():
+        ti_81_df = pd.read_csv(ti_81_file)
+    if overall_file.exists():
+        overall_df = pd.read_csv(overall_file)
+
+    # Check if data is available
+    if ofi_81_df is None or phase_df is None:
+        st.error("Data files not found. Run the export script first: `python data_pipeline/06_export_all_analysis.py`")
+        return
+
+    # Filter to 3×3 subset (do this outside tabs to ensure variables are in scope)
+    ofi_subset = ofi_81_df[
+        (ofi_81_df['time_window'].isin(PRESENTATION_TIME_WINDOWS)) &
+        (ofi_81_df['outlier_method'].isin(PRESENTATION_OUTLIER_METHODS))
+    ].copy()
+
+    phase_subset = phase_df[
+        (phase_df['time_window'].isin(PRESENTATION_TIME_WINDOWS)) &
+        (phase_df['outlier_method'].isin(PRESENTATION_OUTLIER_METHODS))
+    ].copy()
+
+    # Create pivot table for overall OFI (used in multiple tabs)
+    pivot_overall = ofi_subset.pivot(index='time_window', columns='outlier_method', values='r_squared')
+    pivot_overall = pivot_overall.reindex(columns=PRESENTATION_OUTLIER_METHODS)
+
+    # Create tabs for different visualization sections
+    pres_tabs = st.tabs([
+        "OFI Heatmaps",
+        "OFI Scatter Plots",
+        "TI Comparison",
+        "Summary Charts"
+    ])
+
+    # ========================================================================
+    # TAB 1: OFI Heatmaps (Overall + 3 phases) - 3×3 subset
+    # ========================================================================
+    with pres_tabs[0]:
+        st.subheader("OFI R² Heatmaps (3×3 Configuration)")
+        st.markdown("*Time Windows: 15, 45, 90 min | Outlier Methods: Raw, Abs (200k), Z-Score*")
+
+        # 1. Overall R² Heatmap
+        st.markdown("### 1. Overall Market R²")
+
+        fig_overall = go.Figure(data=go.Heatmap(
+            z=pivot_overall.values * 100,
+            x=pivot_overall.columns,
+            y=[f"{tw} min" for tw in pivot_overall.index],
+            colorscale='RdYlGn',
+            text=[[f"{v:.1f}%" for v in row] for row in pivot_overall.values * 100],
+            texttemplate="%{text}",
+            textfont={"size": 14, "color": "black"},
+            hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
+            colorbar=dict(title="R² (%)", tickfont=dict(color='black'), titlefont=dict(color='black'))
+        ))
+        fig_overall.update_layout(
+            title="OFI R² (%) - Overall Market",
+            xaxis_title="Outlier Method",
+            yaxis_title="Time Window",
+            height=350
+        )
+        fig_overall = apply_white_background(fig_overall)
+        st.plotly_chart(fig_overall, use_container_width=True, key="overall_heatmap")
+
+        if has_kaleido:
+            create_download_button(fig_overall, "ofi_overall_heatmap.png", "dl_overall")
+
+        # 2-4. Phase Heatmaps
+        phases = ["Phase 1 (Early)", "Phase 2 (Middle)", "Phase 3 (Near Expiry)"]
+        phase_titles = ["Early Market (Phase 1)", "Middle Market (Phase 2)", "Near Expiry (Phase 3)"]
+
+        for i, (phase, title) in enumerate(zip(phases, phase_titles)):
+            st.markdown(f"### {i+2}. {title} R²")
+
+            phase_data = phase_subset[phase_subset['phase'] == phase]
+            if len(phase_data) == 0:
+                st.warning(f"No data for {phase}")
+                continue
+
+            pivot_phase = phase_data.pivot(index='time_window', columns='outlier_method', values='r_squared')
+            pivot_phase = pivot_phase.reindex(columns=PRESENTATION_OUTLIER_METHODS)
+
+            fig_phase = go.Figure(data=go.Heatmap(
+                z=pivot_phase.values * 100,
+                x=pivot_phase.columns,
+                y=[f"{tw} min" for tw in pivot_phase.index],
+                colorscale='RdYlGn',
+                text=[[f"{v:.1f}%" for v in row] for row in pivot_phase.values * 100],
+                texttemplate="%{text}",
+                textfont={"size": 14, "color": "black"},
+                hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
+                colorbar=dict(title="R² (%)", tickfont=dict(color='black'), titlefont=dict(color='black'))
+            ))
+            fig_phase.update_layout(
+                title=f"OFI R² (%) - {title}",
+                xaxis_title="Outlier Method",
+                yaxis_title="Time Window",
+                height=350
+            )
+            fig_phase = apply_white_background(fig_phase)
+            st.plotly_chart(fig_phase, use_container_width=True, key=f"phase_{i}_heatmap")
+
+            if has_kaleido:
+                create_download_button(fig_phase, f"ofi_phase{i+1}_heatmap.png", f"dl_phase_{i}")
+
+    # ========================================================================
+    # TAB 2: OFI Scatter Plots (45-min, Z-Score by phase)
+    # ========================================================================
+    with pres_tabs[1]:
+        st.subheader("OFI Price Impact Scatter Plots")
+        st.markdown("*Configuration: 45-minute window, Z-Score outlier removal*")
+
+        # Aggregate data for 45-min window
+        time_window_str = '45min'
+        aggregated_df = aggregate_ofi_data(raw_ofi_df.copy(), time_window_str)
+        filtered_ofi = filter_by_date(aggregated_df, start_datetime, end_datetime)
+
+        if filtered_ofi is None or len(filtered_ofi) == 0:
+            st.error("No data available for scatter plots")
+        else:
+            # Apply Z-Score filtering
+            filtered_data = filter_outliers_zscore(filtered_ofi, 'ofi', 3)
+            dep_var = get_dependent_variable_name()
+
+            # Split into phases
+            phases_dict = split_into_phases(filtered_data, split_method)
+
+            # Get phase-specific R² values from pre-computed data
+            phase_r2_data = phase_subset[
+                (phase_subset['time_window'] == 45) &
+                (phase_subset['outlier_method'] == 'Z-Score (3)')
+            ]
+
+            colors = ['#2E86AB', '#A23B72', '#F77F00']  # Blue, Purple, Orange
+            phase_names = ["Phase 1 (Early)", "Phase 2 (Middle)", "Phase 3 (Near Expiry)"]
+            phase_labels = ["Early Market", "Middle Market", "Near Expiry"]
+
+            for i, (phase_name, phase_label, color) in enumerate(zip(phase_names, phase_labels, colors)):
+                st.markdown(f"### {phase_label} (45-min, Z-Score)")
+
+                phase_data = phases_dict.get(phase_name)
+                if phase_data is None or len(phase_data) < 10:
+                    st.warning(f"Insufficient data for {phase_label}")
+                    continue
+
+                df_clean = phase_data.dropna(subset=['ofi', dep_var]).copy()
+
+                # Run regression
+                slope, intercept, r_value, p_value, std_err = stats.linregress(
+                    df_clean['ofi'], df_clean[dep_var]
+                )
+
+                # Create scatter plot
+                fig = go.Figure()
+
+                # Add scatter points
+                fig.add_trace(go.Scatter(
+                    x=df_clean['ofi'],
+                    y=df_clean[dep_var],
+                    mode='markers',
+                    marker=dict(size=6, color=color, opacity=0.6),
+                    name='Data Points',
+                    hovertemplate='<b>OFI:</b> %{x:.2f}<br><b>ΔPrice:</b> %{y:.4f}<extra></extra>'
+                ))
+
+                # Add regression line
+                x_range = np.linspace(df_clean['ofi'].min(), df_clean['ofi'].max(), 100)
+                y_pred = slope * x_range + intercept
+                fig.add_trace(go.Scatter(
+                    x=x_range,
+                    y=y_pred,
+                    mode='lines',
+                    line=dict(color='red', width=2),
+                    name='Regression Line'
+                ))
+
+                # Add annotation
+                fig.add_annotation(
+                    x=0.02, y=0.98,
+                    xref='paper', yref='paper',
+                    text=f'β = {slope:.2e}<br>R² = {r_value**2:.3f}<br>p = {p_value:.2e}<br>n = {len(df_clean)}',
+                    showarrow=False,
+                    bgcolor='white',
+                    bordercolor='black',
+                    borderwidth=1,
+                    font=dict(size=11, color='black'),
+                    align='left'
+                )
+
+                fig.update_layout(
+                    title=f"{phase_label}: OFI vs Price Change",
+                    xaxis_title="Order Flow Imbalance (OFI)",
+                    yaxis_title="Price Change (ticks)",
+                    height=450,
+                    showlegend=False
+                )
+                fig = apply_white_background(fig)
+                st.plotly_chart(fig, use_container_width=True, key=f"scatter_{i}")
+
+                if has_kaleido:
+                    create_download_button(fig, f"ofi_scatter_phase{i+1}.png", f"dl_scatter_{i}")
+
+            # R² by Phase bar chart
+            st.markdown("### R² Progression Across Phases")
+
+            r2_values = []
+            for phase_name in phase_names:
+                phase_data = phases_dict.get(phase_name)
+                if phase_data is not None and len(phase_data) >= 10:
+                    df_clean = phase_data.dropna(subset=['ofi', dep_var])
+                    _, _, r_value, _, _ = stats.linregress(df_clean['ofi'], df_clean[dep_var])
+                    r2_values.append(r_value**2)
+                else:
+                    r2_values.append(0)
+
+            fig_r2 = go.Figure()
+            fig_r2.add_trace(go.Bar(
+                x=phase_labels,
+                y=[r * 100 for r in r2_values],
+                marker_color=colors,
+                text=[f"{r*100:.1f}%" for r in r2_values],
+                textposition='outside',
+                textfont=dict(size=14, color='black')
+            ))
+            fig_r2.update_layout(
+                title="R² Increases as Market Approaches Expiry (45-min, Z-Score)",
+                xaxis_title="Market Phase",
+                yaxis_title="R² (%)",
+                height=400,
+                showlegend=False
+            )
+            fig_r2 = apply_white_background(fig_r2)
+            st.plotly_chart(fig_r2, use_container_width=True, key="r2_progression")
+
+            if has_kaleido:
+                create_download_button(fig_r2, "r2_by_phase.png", "dl_r2_phase")
+
+    # ========================================================================
+    # TAB 3: TI Comparison
+    # ========================================================================
+    with pres_tabs[2]:
+        st.subheader("Trade Imbalance (TI) Comparison")
+        st.markdown("*Comparing OFI vs TI across 3×3 configuration*")
+
+        if ti_81_df is None:
+            st.error("TI data not found. Run the export script first.")
+        else:
+            # Filter TI to 3×3 subset
+            ti_subset = ti_81_df[
+                (ti_81_df['time_window'].isin(PRESENTATION_TIME_WINDOWS)) &
+                (ti_81_df['outlier_method'].isin(PRESENTATION_OUTLIER_METHODS))
+            ].copy()
+
+            # TI Heatmap
+            st.markdown("### 1. TI R² Heatmap")
+            pivot_ti = ti_subset.pivot(index='time_window', columns='outlier_method', values='r_squared')
+            pivot_ti = pivot_ti.reindex(columns=PRESENTATION_OUTLIER_METHODS)
+
+            fig_ti = go.Figure(data=go.Heatmap(
+                z=pivot_ti.values * 100,
+                x=pivot_ti.columns,
+                y=[f"{tw} min" for tw in pivot_ti.index],
+                colorscale='RdYlGn',
+                text=[[f"{v:.2f}%" for v in row] for row in pivot_ti.values * 100],
+                texttemplate="%{text}",
+                textfont={"size": 14, "color": "black"},
+                hovertemplate="Time: %{y}<br>Method: %{x}<br>R²: %{z:.2f}%<extra></extra>",
+                colorbar=dict(title="R² (%)", tickfont=dict(color='black'), titlefont=dict(color='black'))
+            ))
+            fig_ti.update_layout(
+                title="TI R² (%) - Trade Imbalance vs Price Change",
+                xaxis_title="Outlier Method",
+                yaxis_title="Time Window",
+                height=350
+            )
+            fig_ti = apply_white_background(fig_ti)
+            st.plotly_chart(fig_ti, use_container_width=True, key="ti_heatmap")
+
+            if has_kaleido:
+                create_download_button(fig_ti, "ti_heatmap.png", "dl_ti")
+
+            # Side-by-side comparison
+            st.markdown("### 2. OFI vs TI Side-by-Side")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**OFI R² (0-40% scale)**")
+                fig_ofi_side = go.Figure(data=go.Heatmap(
+                    z=pivot_overall.values * 100,
+                    x=pivot_overall.columns,
+                    y=[f"{tw} min" for tw in pivot_overall.index],
+                    colorscale='RdYlGn',
+                    zmin=0, zmax=40,
+                    text=[[f"{v:.1f}%" for v in row] for row in pivot_overall.values * 100],
+                    texttemplate="%{text}",
+                    textfont={"size": 12, "color": "black"},
+                    colorbar=dict(title="R² (%)")
+                ))
+                fig_ofi_side.update_layout(title="OFI", height=300)
+                fig_ofi_side = apply_white_background(fig_ofi_side)
+                st.plotly_chart(fig_ofi_side, use_container_width=True, key="ofi_side")
+
+            with col2:
+                st.markdown("**TI R² (0-1% scale)**")
+                fig_ti_side = go.Figure(data=go.Heatmap(
+                    z=pivot_ti.values * 100,
+                    x=pivot_ti.columns,
+                    y=[f"{tw} min" for tw in pivot_ti.index],
+                    colorscale='RdYlGn',
+                    zmin=0, zmax=1,
+                    text=[[f"{v:.2f}%" for v in row] for row in pivot_ti.values * 100],
+                    texttemplate="%{text}",
+                    textfont={"size": 12, "color": "black"},
+                    colorbar=dict(title="R² (%)")
+                ))
+                fig_ti_side.update_layout(title="TI", height=300)
+                fig_ti_side = apply_white_background(fig_ti_side)
+                st.plotly_chart(fig_ti_side, use_container_width=True, key="ti_side")
+
+            st.success("**Key Finding:** OFI R² ranges from 15-35% while TI R² is <1% across all configurations")
+
+    # ========================================================================
+    # TAB 4: Summary Charts
+    # ========================================================================
+    with pres_tabs[3]:
+        st.subheader("Summary Comparison Charts")
+        st.markdown("*Final comparison: OFI vs |OFI| vs TI vs Volume (45-min, Z-Score)*")
+
+        if overall_df is not None:
+            # Comparison bar chart
+            st.markdown("### R² Comparison (45-min, Z-Score)")
+
+            metrics = overall_df['metric'].tolist()
+            r2_values = overall_df['r_squared'].tolist()
+            colors = ['#2E86AB', '#A23B72', '#06A77D', '#F18F01']
+
+            fig_compare = go.Figure()
+            fig_compare.add_trace(go.Bar(
+                x=metrics,
+                y=[r * 100 for r in r2_values],
+                marker_color=colors,
+                text=[f"{r*100:.1f}%" for r in r2_values],
+                textposition='outside',
+                textfont=dict(size=14, color='black')
+            ))
+            fig_compare.update_layout(
+                title="R² Comparison: OFI Dominates All Other Metrics",
+                xaxis_title="Metric",
+                yaxis_title="R² (%)",
+                height=450,
+                showlegend=False
+            )
+            fig_compare = apply_white_background(fig_compare)
+            st.plotly_chart(fig_compare, use_container_width=True, key="compare_bar")
+
+            if has_kaleido:
+                create_download_button(fig_compare, "comparison_bar.png", "dl_compare")
+
+            # Results table
+            st.markdown("### Detailed Results Table")
+
+            results_table = overall_df.copy()
+            results_table['r_squared'] = results_table['r_squared'].apply(lambda x: f"{x*100:.2f}%")
+            results_table['beta'] = results_table['beta'].apply(lambda x: f"{x:.2e}")
+            results_table['p_value'] = results_table['p_value'].apply(lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}")
+
+            st.dataframe(
+                results_table.rename(columns={
+                    'metric': 'Metric',
+                    'r_squared': 'R²',
+                    'beta': 'β',
+                    'p_value': 'p-value',
+                    'notes': 'Model'
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.success("""
+            **Key Takeaways:**
+            - **OFI (31.2%)** dramatically outperforms all other metrics
+            - **TI (0.7%)** has minimal explanatory power
+            - **Volume (1.7%)** is also a poor predictor
+            - OFI captures order book dynamics that trade-based metrics miss
+            """)
+        else:
+            st.warning("Overall comparison data not found. Run the export script first.")
+
+
+# ============================================================================
 # MAIN APP
 # ============================================================================
 
@@ -1945,12 +2419,12 @@ def main():
         st.header("Dashboard")
 
         # Page selector
-        page_options = ["OFI Analysis", "Depth Analysis", "TI vs OFI Comparison"]
+        page_options = ["OFI Analysis", "Depth Analysis", "TI vs OFI Comparison", "Presentation"]
         selected_page = st.radio(
             "Select Analysis Type",
             options=page_options,
             index=0,
-            help="OFI: 243 regressions. Depth: β vs Market Depth. TI: Trade Imbalance vs OFI."
+            help="OFI: 243 regressions. Depth: β vs Market Depth. TI: Trade Imbalance vs OFI. Presentation: Poster-ready plots."
         )
 
         st.divider()
@@ -2073,6 +2547,10 @@ def main():
     elif selected_page == "TI vs OFI Comparison":
         # Render TI Comparison content
         render_ti_comparison(market_config, raw_ofi_df)
+
+    elif selected_page == "Presentation":
+        # Render Presentation tab (poster-ready plots)
+        render_presentation(market_config, raw_ofi_df, split_method, start_datetime, end_datetime)
 
     else:
         # Default: OFI Analysis
