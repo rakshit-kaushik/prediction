@@ -8,6 +8,9 @@ __pycache__/
 
 # Large raw data files (can be regenerated)
 data/*_raw.json
+data/mlofi/multilevel_processed.csv
+data/mlofi/mlofi_calculated.csv
+data/mlofi/mlofi_enhanced.csv
 *.log
 
 # Large CSV exports (keep in local, not git)
