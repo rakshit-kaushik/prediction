@@ -171,7 +171,7 @@ def download_trades_day(token_id, date, api_key):
             break
 
         offset += limit
-        time.sleep(1.0)  # Rate limiting between pagination requests
+        time.sleep(2.0)  # Rate limiting between pagination requests
 
     return all_trades
 
@@ -209,7 +209,7 @@ def download_all_trades(token_id, start_date, end_date, api_key):
 
         current_date += timedelta(days=1)
         pbar.update(1)
-        time.sleep(2.0)  # Delay between days to avoid rate limiting
+        time.sleep(5.0)  # Delay between days to avoid rate limiting
 
     pbar.close()
     return all_trades

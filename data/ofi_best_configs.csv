@@ -1,0 +1,5 @@
+category,time_window,method,r_squared
+Overall Best,90,Z-Score (3),0.35316804183309364
+Best Phase 1 (Early),90,Abs (200k),0.1594737915303959
+Best Phase 2 (Middle),90,Abs (100k),0.47766093837461904
+Best Phase 3 (Near Expiry),45,Z-Score (3),0.4428149054510767

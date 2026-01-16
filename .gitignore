@@ -8,6 +8,13 @@ __pycache__/
 
 # Large raw data files (can be regenerated)
 data/*_raw.json
+*.log
+
+# Large CSV exports (keep in local, not git)
+DOME_*.csv
+
+# Generated images
+*.png
 
 # IDE files
 .vscode/
@@ -18,3 +25,6 @@ data/*_raw.json
 # OS files
 .DS_Store
 .archive/
+
+# Virtual environment
+.venv/
