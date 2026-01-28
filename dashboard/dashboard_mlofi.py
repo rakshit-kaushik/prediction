@@ -36,6 +36,7 @@ DATA_DIR = Path(__file__).parent.parent / "data" / "mlofi"
 # Expected files
 ALL_CONFIGS_FILE = DATA_DIR / "mlofi_all_configs.csv"
 PHASE_ANALYSIS_FILE = DATA_DIR / "mlofi_top20_phase_analysis.csv"
+CUMULATIVE_MLOFI_FILE = DATA_DIR / "cumulative_mlofi_results.csv"
 
 # Colors
 COLORS = {
@@ -78,6 +79,15 @@ def load_phase_analysis():
     if not PHASE_ANALYSIS_FILE.exists():
         return None
     df = pd.read_csv(PHASE_ANALYSIS_FILE)
+    return df
+
+
+@st.cache_data
+def load_cumulative_mlofi():
+    """Load cumulative MLOFI results"""
+    if not CUMULATIVE_MLOFI_FILE.exists():
+        return None
+    df = pd.read_csv(CUMULATIVE_MLOFI_FILE)
     return df
 
 
@@ -510,6 +520,7 @@ def main():
         "Level Analysis",
         "Time Windows",
         "Phase Analysis",
+        "Cumulative MLOFI",
         "Detailed Explorer"
     ])
 
@@ -734,9 +745,259 @@ def main():
             st.warning("Phase analysis data not available. Run evaluation script first.")
 
     # =========================================================================
-    # TAB 4: DETAILED EXPLORER
+    # TAB 4: CUMULATIVE MLOFI
     # =========================================================================
     with tabs[4]:
+        st.header("Cumulative MLOFI Analysis")
+
+        # Page explanation
+        st.markdown("""
+        This page presents **Cumulative MLOFI** - an alternative approach to multi-level OFI calculation.
+
+        **Standard MLOFI (Sum OFI at each level):**
+        ```
+        cumulative_ofi_L2 = ofi_l1 + ofi_l2
+        ```
+
+        **Cumulative MLOFI (Sum sizes first, then calculate OFI):**
+        ```
+        cumulative_ofi_L2 = OFI(bid_size_l1 + bid_size_l2, ask_size_l1 + ask_size_l2)
+        ```
+
+        This approach first aggregates the liquidity through level N, then calculates OFI on the
+        aggregated quantities. This captures the **total order flow imbalance across the top N levels
+        as a single unified measure**.
+
+        **Configuration:**
+        - **Levels:** L2, L5, L10
+        - **Exponent:** a = 0.3 (size transformation)
+        - **Time Windows:** 45, 60, 90 minutes
+        - **Outlier Methods:** Raw, Z-Score, Winsorized
+        """)
+
+        st.markdown("---")
+
+        # Load cumulative MLOFI data
+        cumulative_df = load_cumulative_mlofi()
+
+        if cumulative_df is None or len(cumulative_df) == 0:
+            st.warning("Cumulative MLOFI data not found. Please run the analysis script first:")
+            st.code("python mlofi/07_cumulative_mlofi.py", language="bash")
+        else:
+            # Summary metrics
+            st.subheader("Results Summary")
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Configurations Tested", f"{len(cumulative_df)}")
+            with col2:
+                st.metric("Best R²", f"{cumulative_df['r2'].max()*100:.2f}%")
+            with col3:
+                best_row = cumulative_df.iloc[0]
+                st.metric("Best Level", best_row['level'])
+            with col4:
+                st.metric("Best Window", f"{best_row['time_window']} min")
+
+            st.markdown("---")
+
+            # Top configurations bar chart
+            st.subheader("All Configurations Ranked by R²")
+
+            cumulative_df_sorted = cumulative_df.sort_values('r2', ascending=False).copy()
+            cumulative_df_sorted['config_label'] = cumulative_df_sorted.apply(
+                lambda r: f"{r['level']} | {r['time_window']}min | {r['outlier_method']}",
+                axis=1
+            )
+
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(
+                x=cumulative_df_sorted['r2'] * 100,
+                y=cumulative_df_sorted['config_label'],
+                orientation='h',
+                marker=dict(
+                    color=cumulative_df_sorted['r2'],
+                    colorscale='RdYlGn',
+                    showscale=True,
+                    colorbar=dict(title='R²')
+                ),
+                text=[f"{r*100:.1f}%" for r in cumulative_df_sorted['r2']],
+                textposition='outside',
+                hovertemplate='<b>%{y}</b><br>R² = %{x:.2f}%<extra></extra>'
+            ))
+
+            fig_bar.update_layout(
+                title="Cumulative MLOFI: All Configurations by R²",
+                xaxis_title="R² (%)",
+                yaxis_title="Configuration",
+                height=500,
+                yaxis=dict(autorange='reversed'),
+                showlegend=False
+            )
+
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            st.markdown("---")
+
+            # Comparison by Level
+            st.subheader("R² by Level Configuration")
+
+            level_summary = cumulative_df.groupby('level').agg({
+                'r2': ['max', 'mean']
+            }).reset_index()
+            level_summary.columns = ['level', 'max_r2', 'mean_r2']
+            level_summary = level_summary.sort_values('max_r2', ascending=False)
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                fig_level = go.Figure()
+                fig_level.add_trace(go.Bar(
+                    x=level_summary['level'],
+                    y=level_summary['max_r2'] * 100,
+                    name='Max R²',
+                    marker_color=['#2ca02c', '#1f77b4', '#d62728'],
+                    text=[f"{r*100:.1f}%" for r in level_summary['max_r2']],
+                    textposition='outside'
+                ))
+                fig_level.update_layout(
+                    title="Maximum R² by Level",
+                    xaxis_title="Level (Cumulative through L)",
+                    yaxis_title="R² (%)",
+                    height=350,
+                    showlegend=False
+                )
+                st.plotly_chart(fig_level, use_container_width=True)
+
+            with col2:
+                fig_level_mean = go.Figure()
+                fig_level_mean.add_trace(go.Bar(
+                    x=level_summary['level'],
+                    y=level_summary['mean_r2'] * 100,
+                    name='Mean R²',
+                    marker_color=['#2ca02c', '#1f77b4', '#d62728'],
+                    text=[f"{r*100:.1f}%" for r in level_summary['mean_r2']],
+                    textposition='outside'
+                ))
+                fig_level_mean.update_layout(
+                    title="Mean R² by Level",
+                    xaxis_title="Level (Cumulative through L)",
+                    yaxis_title="R² (%)",
+                    height=350,
+                    showlegend=False
+                )
+                st.plotly_chart(fig_level_mean, use_container_width=True)
+
+            st.markdown("---")
+
+            # Comparison by Time Window
+            st.subheader("R² by Time Window")
+
+            tw_summary = cumulative_df.groupby('time_window').agg({
+                'r2': ['max', 'mean']
+            }).reset_index()
+            tw_summary.columns = ['time_window', 'max_r2', 'mean_r2']
+
+            fig_tw = go.Figure()
+            fig_tw.add_trace(go.Scatter(
+                x=tw_summary['time_window'],
+                y=tw_summary['max_r2'] * 100,
+                mode='lines+markers',
+                name='Max R²',
+                line=dict(color=COLORS['success'], width=3),
+                marker=dict(size=12)
+            ))
+            fig_tw.add_trace(go.Scatter(
+                x=tw_summary['time_window'],
+                y=tw_summary['mean_r2'] * 100,
+                mode='lines+markers',
+                name='Mean R²',
+                line=dict(color=COLORS['primary'], width=2, dash='dash'),
+                marker=dict(size=10)
+            ))
+            fig_tw.update_layout(
+                title="R² by Time Window",
+                xaxis_title="Time Window (minutes)",
+                yaxis_title="R² (%)",
+                height=350,
+                legend=dict(orientation='h', yanchor='bottom', y=1.02)
+            )
+            st.plotly_chart(fig_tw, use_container_width=True)
+
+            st.markdown("---")
+
+            # Heatmap: Level x Time Window
+            st.subheader("R² Heatmap: Level x Time Window")
+
+            # Create pivot for each outlier method
+            selected_outlier = st.selectbox(
+                "Select Outlier Method:",
+                cumulative_df['outlier_method'].unique(),
+                key="cumulative_outlier"
+            )
+
+            filtered_for_heatmap = cumulative_df[cumulative_df['outlier_method'] == selected_outlier]
+
+            if len(filtered_for_heatmap) > 0:
+                pivot = filtered_for_heatmap.pivot_table(
+                    index='level',
+                    columns='time_window',
+                    values='r2'
+                ) * 100
+
+                fig_heatmap = go.Figure(data=go.Heatmap(
+                    z=pivot.values,
+                    x=[f"{t}min" for t in pivot.columns],
+                    y=pivot.index,
+                    colorscale='RdYlGn',
+                    text=[[f"{v:.1f}" for v in row] for row in pivot.values],
+                    texttemplate="%{text}%",
+                    textfont={"size": 12},
+                    hovertemplate='Level: %{y}<br>Window: %{x}<br>R²: %{z:.1f}%<extra></extra>',
+                    colorbar=dict(title='R² (%)')
+                ))
+
+                fig_heatmap.update_layout(
+                    title=f"R² Heatmap ({selected_outlier})",
+                    xaxis_title="Time Window",
+                    yaxis_title="Level",
+                    height=300
+                )
+
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+
+            st.markdown("---")
+
+            # Full Results Table
+            st.subheader("Full Results Table")
+            display_df = cumulative_df.copy()
+            display_df['r2_pct'] = (display_df['r2'] * 100).round(2)
+            display_df = display_df.sort_values('r2', ascending=False)
+
+            st.dataframe(
+                display_df[['level', 'time_window', 'outlier_method', 'r2_pct', 'beta', 'n_obs']].rename(columns={
+                    'level': 'Level',
+                    'time_window': 'Window (min)',
+                    'outlier_method': 'Outlier Method',
+                    'r2_pct': 'R² (%)',
+                    'beta': 'Beta',
+                    'n_obs': 'N obs'
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.markdown("""
+            ---
+            **Key Insight:** Cumulative MLOFI aggregates liquidity through level N before calculating OFI.
+            This differs from standard MLOFI which sums individual level OFIs. The cumulative approach
+            treats the top N levels as a single liquidity pool, which may better capture the overall
+            order flow dynamics in markets with varying depth.
+            """)
+
+    # =========================================================================
+    # TAB 5: DETAILED EXPLORER
+    # =========================================================================
+    with tabs[5]:
         st.header("Configuration Explorer")
 
         # Page explanation
