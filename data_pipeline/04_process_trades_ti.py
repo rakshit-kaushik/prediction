@@ -1,17 +1,20 @@
 """
 04_process_trades_ti.py
 ========================
-Process DOME trade data and calculate Trade Imbalance (TI) following Cont et al. (2014).
+Process DOME trade data and calculate Trade Flow Imbalance (TFI) following
+Silantyev (2019) / Cont et al. (2014).
 
-81-Configuration Analysis (same as OFI):
-- 9 time windows x 9 outlier methods = 81 R^2 scores
-- Enables direct comparison with OFI results
+Improvements over v1:
+  1. Filter to YES token only (removes NO token contamination)
+  2. Use DOME trade prices for mid-price (not sparse OFI snapshots)
+  3. Two mid-price methods: last-trade price and VWAP
+  4. Extended time windows up to 360 min
 
 Trade Imbalance = Sigma(signed_volume) where:
   - BUY trades -> positive volume
   - SELL trades -> negative volume
 
-Price Impact Model: Delta_P = alpha + beta * TI + epsilon
+Price Impact Model: Delta_P = alpha + beta * TFI + epsilon
 
 Usage:
     python data_pipeline/04_process_trades_ti.py
@@ -28,15 +31,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # File paths
 DOME_TRADES_FILE = Path(__file__).parent.parent / "DOME_zohran-oct-15_2025-11-29.csv"
-OFI_RESULTS_FILE = Path(__file__).parent.parent / "data" / "ofi_results.csv"
-OUTPUT_FILE = Path(__file__).parent.parent / "data" / "ti_analysis_results.csv"
 OUTPUT_81_FILE = Path(__file__).parent.parent / "data" / "ti_81_configs.csv"
 
+TICK_SIZE = 0.01
+
 # ============================================================================
-# CONFIGURATION (Same as OFI dashboard)
+# CONFIGURATION
 # ============================================================================
 
-TIME_WINDOWS = [1, 5, 10, 15, 20, 30, 45, 60, 90]  # minutes
+TIME_WINDOWS = [1, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360]  # minutes
 
 OUTLIER_METHODS = [
     'Raw',
@@ -50,7 +53,8 @@ OUTLIER_METHODS = [
     'Pctl (5%-95%)'
 ]
 
-TICK_SIZE = 0.01
+# Mid-price methods to try
+MID_PRICE_METHODS = ['last_trade', 'vwap']
 
 # ============================================================================
 # OUTLIER FILTERING FUNCTIONS (Same as OFI dashboard)
@@ -101,7 +105,6 @@ def filter_outliers_mad(df, column, threshold=3):
     return df[np.abs(modified_z) <= threshold]
 
 def apply_outlier_method(df, method_idx, column='trade_imbalance'):
-    """Apply outlier method by index (0-8) to TI column"""
     if method_idx == 0:
         return df.copy()
     elif method_idx == 1:
@@ -128,111 +131,91 @@ def apply_outlier_method(df, method_idx, column='trade_imbalance'):
 # ============================================================================
 
 def load_dome_trades():
-    """Load and process DOME trade data"""
+    """Load DOME trade data, filtered to YES token only."""
     print("\n Loading DOME trade data...")
 
     trades = pd.read_csv(DOME_TRADES_FILE)
-    print(f"   Total records: {len(trades):,}")
+    print(f"   Total records (both tokens): {len(trades):,}")
 
-    # Parse timestamp and make UTC-aware
+    # Filter to YES token only
+    primary_token = str(trades['primary_token_id'].iloc[0])
+    trades = trades[trades['token_id'].astype(str) == primary_token].copy()
+    print(f"   YES token records: {len(trades):,}")
+
+    # Parse timestamp
     trades['timestamp'] = pd.to_datetime(trades['block_timestamp'], utc=True)
 
     # Normalize shares (divide by 1e6)
     trades['shares_normalized'] = trades['shares'] / 1e6
 
-    # Create signed volume (positive for BUY, negative for SELL)
+    # Signed volume: BUY -> +, SELL -> -
     trades['signed_volume'] = np.where(
         trades['side'] == 'BUY',
         trades['shares_normalized'],
         -trades['shares_normalized']
     )
 
+    # Dollar volume for VWAP: price * shares
+    trades['dollar_volume'] = trades['price'] * trades['shares_normalized']
+
     # Sort by timestamp
     trades = trades.sort_values('timestamp').reset_index(drop=True)
 
-    # Stats
     buys = (trades['side'] == 'BUY').sum()
     sells = (trades['side'] == 'SELL').sum()
     print(f"   BUY trades:  {buys:,} ({buys/len(trades)*100:.1f}%)")
     print(f"   SELL trades: {sells:,} ({sells/len(trades)*100:.1f}%)")
+    print(f"   Price range: ${trades['price'].min():.4f} - ${trades['price'].max():.4f}")
+    print(f"   Unique prices: {trades['price'].nunique()}")
     print(f"   Date range: {trades['timestamp'].min()} to {trades['timestamp'].max()}")
 
     return trades
 
 
-def load_ofi_data():
-    """Load OFI data for mid-price changes"""
-    print("\n Loading OFI data (for order book mid-prices)...")
-
-    ofi_df = pd.read_csv(OFI_RESULTS_FILE)
-    ofi_df['timestamp'] = pd.to_datetime(ofi_df['timestamp'], format='mixed', utc=True)
-
-    print(f"   Total snapshots: {len(ofi_df):,}")
-    print(f"   Date range: {ofi_df['timestamp'].min()} to {ofi_df['timestamp'].max()}")
-
-    return ofi_df
-
-
 # ============================================================================
-# TI CALCULATION
+# TI + PRICE CALCULATION (all from trades — no external merge needed)
 # ============================================================================
 
-def calculate_ti_per_window(trades, time_window_minutes):
+def calculate_ti_and_price_per_window(trades, time_window_minutes, mid_price_method='last_trade'):
     """
-    Calculate Trade Imbalance per time window.
+    Calculate Trade Imbalance AND mid-price change per window, all from trade data.
 
-    Args:
-        trades: DataFrame with timestamp, signed_volume, shares_normalized
-        time_window_minutes: Window size in minutes
-
-    Returns:
-        DataFrame with TI per window
+    Mid-price methods:
+      - 'last_trade': use last trade price in each window
+      - 'vwap': use volume-weighted average price in each window
     """
-    # Floor to window boundaries
     trades = trades.copy()
     trades['window'] = trades['timestamp'].dt.floor(f'{time_window_minutes}min')
 
-    # Aggregate per window
-    ti_data = trades.groupby('window').agg({
-        'signed_volume': 'sum',       # Trade Imbalance
-        'shares_normalized': 'sum',   # Total Volume
-        'side': 'count',              # Trade Count
-    })
+    if mid_price_method == 'last_trade':
+        # Aggregate: TFI + first/last trade price
+        grouped = trades.groupby('window').agg(
+            trade_imbalance=('signed_volume', 'sum'),
+            total_volume=('shares_normalized', 'sum'),
+            trade_count=('side', 'count'),
+            price_first=('price', 'first'),
+            price_last=('price', 'last'),
+        ).reset_index()
 
-    # Flatten column names
-    ti_data.columns = ['trade_imbalance', 'total_volume', 'trade_count']
-    ti_data = ti_data.reset_index()
+        grouped['delta_mid_price'] = grouped['price_last'] - grouped['price_first']
 
-    return ti_data
+    elif mid_price_method == 'vwap':
+        # VWAP = sum(price * volume) / sum(volume)
+        grouped = trades.groupby('window').agg(
+            trade_imbalance=('signed_volume', 'sum'),
+            total_volume=('shares_normalized', 'sum'),
+            trade_count=('side', 'count'),
+            dollar_volume_sum=('dollar_volume', 'sum'),
+        ).reset_index()
 
+        grouped['vwap'] = grouped['dollar_volume_sum'] / grouped['total_volume']
+        # Price change = VWAP(k) - VWAP(k-1)
+        grouped = grouped.sort_values('window').reset_index(drop=True)
+        grouped['delta_mid_price'] = grouped['vwap'].diff()
 
-def get_mid_price_changes(ofi_df, time_window_minutes):
-    """
-    Get mid-price changes from order book data per window.
+    grouped['delta_mid_price_ticks'] = grouped['delta_mid_price'] / TICK_SIZE
 
-    Args:
-        ofi_df: OFI DataFrame with timestamp, mid_price
-        time_window_minutes: Window size in minutes
-
-    Returns:
-        DataFrame with mid-price changes per window
-    """
-    ofi_df = ofi_df.copy()
-    ofi_df['window'] = ofi_df['timestamp'].dt.floor(f'{time_window_minutes}min')
-
-    # Get first and last mid-price per window
-    price_data = ofi_df.groupby('window').agg({
-        'mid_price': ['first', 'last', 'count'],
-    })
-
-    price_data.columns = ['mid_first', 'mid_last', 'snapshot_count']
-    price_data = price_data.reset_index()
-
-    # Calculate price change in ticks
-    price_data['delta_mid_price'] = price_data['mid_last'] - price_data['mid_first']
-    price_data['delta_mid_price_ticks'] = price_data['delta_mid_price'] / TICK_SIZE
-
-    return price_data
+    return grouped
 
 
 # ============================================================================
@@ -240,21 +223,12 @@ def get_mid_price_changes(ofi_df, time_window_minutes):
 # ============================================================================
 
 def run_ti_regression(df):
-    """
-    Run Trade Imbalance regression: Delta_P = alpha + beta * TI + epsilon
-
-    Args:
-        df: DataFrame with trade_imbalance and delta_mid_price_ticks
-
-    Returns:
-        Dict with regression results or None if insufficient data
-    """
+    """Run TFI regression: Delta_P = alpha + beta * TFI + epsilon"""
     df_clean = df.dropna(subset=['trade_imbalance', 'delta_mid_price_ticks'])
 
     if len(df_clean) < 10:
         return None
 
-    # Run regression
     slope, intercept, r_value, p_value, std_err = stats.linregress(
         df_clean['trade_imbalance'],
         df_clean['delta_mid_price_ticks']
@@ -272,162 +246,158 @@ def run_ti_regression(df):
 
 
 # ============================================================================
-# 81-CONFIG ANALYSIS
+# FULL ANALYSIS
 # ============================================================================
 
-def run_81_config_analysis(trades, ofi_df):
+def run_full_analysis(trades):
     """
-    Run TI regression for all 81 configurations (9 windows x 9 outlier methods).
-
-    Returns:
-        DataFrame with all results
+    Run TFI regression for all configurations:
+      - 13 time windows x 9 outlier methods x 2 mid-price methods
     """
-    print("\n Running 81-configuration TI analysis...")
+    total = len(TIME_WINDOWS) * len(OUTLIER_METHODS) * len(MID_PRICE_METHODS)
+    print(f"\n Running full TFI analysis...")
     print(f"   Time Windows: {TIME_WINDOWS}")
     print(f"   Outlier Methods: {len(OUTLIER_METHODS)}")
-    print(f"   Total configs: {len(TIME_WINDOWS) * len(OUTLIER_METHODS)}")
+    print(f"   Mid-price Methods: {MID_PRICE_METHODS}")
+    print(f"   Total configs: {total}")
 
     results = []
 
-    for tw in TIME_WINDOWS:
-        # Calculate TI for this time window
-        ti_data = calculate_ti_per_window(trades, tw)
+    for mp_method in MID_PRICE_METHODS:
+        for tw in TIME_WINDOWS:
+            # Calculate TI + price from trades directly
+            data = calculate_ti_and_price_per_window(trades, tw, mp_method)
 
-        # Get mid-price changes from order book
-        price_data = get_mid_price_changes(ofi_df, tw)
-
-        # Merge on window
-        merged = pd.merge(ti_data, price_data, on='window', how='inner')
-
-        if len(merged) < 10:
-            print(f"   {tw}min: Only {len(merged)} windows, skipping")
-            continue
-
-        for method_idx, method_name in enumerate(OUTLIER_METHODS):
-            # Apply outlier filtering
-            filtered = apply_outlier_method(merged, method_idx, 'trade_imbalance')
-
-            if len(filtered) < 10:
+            if len(data.dropna(subset=['delta_mid_price_ticks'])) < 10:
                 continue
 
-            # Run regression
-            reg_result = run_ti_regression(filtered)
+            for method_idx, method_name in enumerate(OUTLIER_METHODS):
+                filtered = apply_outlier_method(data, method_idx, 'trade_imbalance')
 
-            if reg_result is not None:
-                results.append({
-                    'time_window': tw,
-                    'outlier_method': method_name,
-                    'r_squared': reg_result['r_squared'],
-                    'beta': reg_result['beta'],
-                    'p_value': reg_result['p_value'],
-                    'n_windows': reg_result['n_windows'],
-                    'std_err': reg_result['std_err']
-                })
+                if len(filtered.dropna(subset=['delta_mid_price_ticks'])) < 10:
+                    continue
+
+                reg_result = run_ti_regression(filtered)
+
+                if reg_result is not None:
+                    results.append({
+                        'mid_price_method': mp_method,
+                        'time_window': tw,
+                        'outlier_method': method_name,
+                        'r_squared': reg_result['r_squared'],
+                        'beta': reg_result['beta'],
+                        'p_value': reg_result['p_value'],
+                        'n_windows': reg_result['n_windows'],
+                        'std_err': reg_result['std_err']
+                    })
 
     results_df = pd.DataFrame(results)
     print(f"\n   Computed {len(results_df)} configurations")
-
     return results_df
 
 
 def print_summary(results_df):
-    """Print summary of 81-config results"""
+    """Print summary by mid-price method."""
 
-    print("\n" + "=" * 80)
-    print("TI ANALYSIS SUMMARY (81 Configurations)")
-    print("=" * 80)
+    for mp_method in MID_PRICE_METHODS:
+        subset = results_df[results_df['mid_price_method'] == mp_method]
+        if len(subset) == 0:
+            continue
 
-    # Best config
-    best = results_df.loc[results_df['r_squared'].idxmax()]
-    print(f"\n BEST CONFIG:")
-    print(f"   Window:  {best['time_window']} min")
-    print(f"   Method:  {best['outlier_method']}")
-    print(f"   R^2:     {best['r_squared']:.4f} ({best['r_squared']*100:.2f}%)")
-    print(f"   Beta:    {best['beta']:.6f}")
-    print(f"   p-value: {best['p_value']:.2e}")
+        print("\n" + "=" * 80)
+        print(f"TFI RESULTS — Mid-price method: {mp_method.upper()}")
+        print("=" * 80)
 
-    # Stats by time window
-    print("\n R^2 by Time Window:")
-    tw_stats = results_df.groupby('time_window')['r_squared'].agg(['mean', 'max'])
-    for tw in TIME_WINDOWS:
-        if tw in tw_stats.index:
-            print(f"   {tw:3d} min: avg={tw_stats.loc[tw, 'mean']:.4f}, max={tw_stats.loc[tw, 'max']:.4f}")
+        best = subset.loc[subset['r_squared'].idxmax()]
+        print(f"\n BEST CONFIG:")
+        print(f"   Window:  {int(best['time_window'])} min")
+        print(f"   Method:  {best['outlier_method']}")
+        print(f"   R^2:     {best['r_squared']:.4f} ({best['r_squared']*100:.2f}%)")
+        print(f"   Beta:    {best['beta']:.6f}")
+        print(f"   p-value: {best['p_value']:.2e}")
+        print(f"   N:       {int(best['n_windows'])}")
 
-    # Stats by outlier method
-    print("\n R^2 by Outlier Method:")
-    method_stats = results_df.groupby('outlier_method')['r_squared'].agg(['mean', 'max'])
-    for method in OUTLIER_METHODS:
-        if method in method_stats.index:
-            print(f"   {method:15s}: avg={method_stats.loc[method, 'mean']:.4f}, max={method_stats.loc[method, 'max']:.4f}")
+        # By time window
+        print(f"\n R^2 by Time Window:")
+        tw_stats = subset.groupby('time_window')['r_squared'].agg(['mean', 'max'])
+        for tw in TIME_WINDOWS:
+            if tw in tw_stats.index:
+                print(f"   {tw:4d} min: avg={tw_stats.loc[tw, 'mean']*100:6.2f}%, max={tw_stats.loc[tw, 'max']*100:6.2f}%")
 
-    # Overall stats
-    print(f"\n Overall Statistics:")
-    print(f"   Mean R^2:   {results_df['r_squared'].mean():.4f} ({results_df['r_squared'].mean()*100:.2f}%)")
-    print(f"   Median R^2: {results_df['r_squared'].median():.4f}")
-    print(f"   Std R^2:    {results_df['r_squared'].std():.4f}")
+        # By outlier method
+        print(f"\n R^2 by Outlier Method:")
+        method_stats = subset.groupby('outlier_method')['r_squared'].agg(['mean', 'max'])
+        for method in OUTLIER_METHODS:
+            if method in method_stats.index:
+                print(f"   {method:15s}: avg={method_stats.loc[method, 'mean']*100:6.2f}%, max={method_stats.loc[method, 'max']*100:6.2f}%")
+
+        print(f"\n Overall: mean={subset['r_squared'].mean()*100:.2f}%, median={subset['r_squared'].median()*100:.2f}%, max={subset['r_squared'].max()*100:.2f}%")
 
 
-def print_heatmap(results_df):
-    """Print ASCII heatmap of R^2 values"""
+def print_heatmap(results_df, mp_method):
+    """Print ASCII heatmap for one mid-price method."""
+    subset = results_df[results_df['mid_price_method'] == mp_method]
+    if len(subset) == 0:
+        return
 
-    print("\n" + "=" * 80)
-    print("R^2 HEATMAP (Time Window x Outlier Method)")
-    print("=" * 80)
+    print(f"\n{'=' * 120}")
+    print(f"R^2 HEATMAP — {mp_method.upper()} (Time Window x Outlier Method)")
+    print(f"{'=' * 120}")
 
-    # Create pivot table
-    pivot = results_df.pivot(index='time_window', columns='outlier_method', values='r_squared')
-
-    # Reorder columns to match OUTLIER_METHODS order
+    pivot = subset.pivot(index='time_window', columns='outlier_method', values='r_squared')
     pivot = pivot.reindex(columns=OUTLIER_METHODS)
 
-    # Print header
-    print("\n" + " " * 8, end="")
+    print("\n" + " " * 10, end="")
     for method in OUTLIER_METHODS:
-        print(f"{method[:6]:>8}", end="")
+        print(f"{method[:8]:>10}", end="")
     print()
 
-    # Print rows
     for tw in TIME_WINDOWS:
         if tw in pivot.index:
-            print(f"{tw:4d}min:", end="")
+            print(f"{tw:5d}min:", end="")
             for method in OUTLIER_METHODS:
                 if method in pivot.columns and pd.notna(pivot.loc[tw, method]):
                     val = pivot.loc[tw, method] * 100
-                    print(f"{val:7.2f}%", end="")
+                    print(f"{val:9.2f}%", end="")
                 else:
-                    print(f"{'N/A':>8}", end="")
+                    print(f"{'N/A':>10}", end="")
             print()
 
 
 def main():
-    """Main execution"""
     print("\n" + "=" * 80)
-    print("TRADE IMBALANCE ANALYSIS - 81 CONFIGURATIONS")
-    print("(Same framework as OFI analysis for direct comparison)")
+    print("TRADE FLOW IMBALANCE (TFI) ANALYSIS — IMPROVED")
+    print("  - YES token only (no NO token contamination)")
+    print("  - Mid-price from trades (last_trade + VWAP)")
+    print("  - Extended windows up to 360 min")
     print("=" * 80)
 
-    # Load data
     trades = load_dome_trades()
-    ofi_df = load_ofi_data()
-
-    # Run 81-config analysis
-    results_df = run_81_config_analysis(trades, ofi_df)
+    results_df = run_full_analysis(trades)
 
     if len(results_df) == 0:
         print("\n No results computed!")
         return None
 
-    # Print summary
     print_summary(results_df)
-    print_heatmap(results_df)
+    for mp in MID_PRICE_METHODS:
+        print_heatmap(results_df, mp)
 
-    # Save results
+    # Save
     print(f"\n Saving results to {OUTPUT_81_FILE}...")
     results_df.to_csv(OUTPUT_81_FILE, index=False)
     print(f"   Saved {len(results_df)} configurations")
 
+    # Top 10 overall
     print("\n" + "=" * 80)
-    print(" TI ANALYSIS COMPLETE")
+    print("TOP 10 CONFIGS (across all mid-price methods)")
+    print("=" * 80)
+    top10 = results_df.nlargest(10, 'r_squared')
+    for i, row in top10.iterrows():
+        print(f"   {row['mid_price_method']:12s} | {int(row['time_window']):4d}min | {row['outlier_method']:15s} | R²={row['r_squared']*100:6.2f}% | β={row['beta']:.6f} | p={row['p_value']:.2e} | N={int(row['n_windows'])}")
+
+    print("\n" + "=" * 80)
+    print(" TFI ANALYSIS COMPLETE")
     print("=" * 80)
 
     return results_df
