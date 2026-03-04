@@ -1557,18 +1557,23 @@ def render_ti_comparison(market_config, raw_ofi_df):
 
         n_col = 'n_windows' if 'n_windows' in tfi_df.columns else 'n_obs' if 'n_obs' in tfi_df.columns else None
         display_cols = ['phase', 'time_window', 'outlier_method', 'r_squared', 'beta', 'p_value']
-        col_names = ['Phase', 'Time Window', 'Outlier Method', 'R²', 'Beta', 'p-value']
-        fmt = {'R²': '{:.4f}', 'Beta': '{:.2e}', 'p-value': '{:.2e}'}
+        col_names = ['Phase', 'Time Window', 'Outlier Method', 'R2', 'Beta', 'p-value']
+        col_config = {
+            'R2': st.column_config.NumberColumn('R²', format='%.4f'),
+            'Beta': st.column_config.NumberColumn(format='%.2e'),
+            'p-value': st.column_config.NumberColumn(format='%.2e'),
+        }
         if n_col:
             display_cols.append(n_col)
             col_names.append('N obs')
-            fmt['N obs'] = '{:.0f}'
+            col_config['N obs'] = st.column_config.NumberColumn(format='%d')
 
         full_display = tfi_df[display_cols].copy()
         full_display.columns = col_names
 
         st.dataframe(
-            full_display.style.format(fmt),
+            full_display,
+            column_config=col_config,
             use_container_width=True,
             height=500
         )
@@ -1796,21 +1801,22 @@ def render_ti_comparison(market_config, raw_ofi_df):
                 'Phase': phase,
                 'Window': f"{int(best['time_window'])}min",
                 'N': int(best['n_obs']),
-                'OFI R²': best['r2_ofi_only'],
-                'TFI R²': best['r2_tfi_only'],
-                'Combined R²': best['r2_combined'],
-                'R² Gain': best['r2_gain_from_tfi'],
+                'OFI R2': best['r2_ofi_only'],
+                'TFI R2': best['r2_tfi_only'],
+                'Combined R2': best['r2_combined'],
+                'R2 Gain': best['r2_gain_from_tfi'],
             })
 
         if best_rows:
             best_df = pd.DataFrame(best_rows)
             st.dataframe(
-                best_df.style.format({
-                    'OFI R²': '{:.4f}',
-                    'TFI R²': '{:.4f}',
-                    'Combined R²': '{:.4f}',
-                    'R² Gain': '{:.4f}',
-                }),
+                best_df,
+                column_config={
+                    'OFI R2': st.column_config.NumberColumn('OFI R²', format='%.4f'),
+                    'TFI R2': st.column_config.NumberColumn('TFI R²', format='%.4f'),
+                    'Combined R2': st.column_config.NumberColumn('Combined R²', format='%.4f'),
+                    'R2 Gain': st.column_config.NumberColumn('R² Gain', format='%.4f'),
+                },
                 use_container_width=True,
                 hide_index=True
             )
@@ -1834,23 +1840,24 @@ def render_ti_comparison(market_config, raw_ofi_df):
             ]].copy()
             display.columns = [
                 'Window', 'N',
-                'OFI-only R²', 'TFI-only R²', 'Combined R²', 'R² Gain',
-                'β(OFI)', 'p(OFI)',
-                'β(TFI)', 'p(TFI)'
+                'OFI-only R2', 'TFI-only R2', 'Combined R2', 'R2 Gain',
+                'Beta OFI', 'p OFI',
+                'Beta TFI', 'p TFI'
             ]
             display['Window'] = display['Window'].apply(lambda x: f"{int(x)}min")
 
             st.dataframe(
-                display.style.format({
-                    'OFI-only R²': '{:.4f}',
-                    'TFI-only R²': '{:.4f}',
-                    'Combined R²': '{:.4f}',
-                    'R² Gain': '{:.4f}',
-                    'β(OFI)': '{:.2e}',
-                    'p(OFI)': '{:.2e}',
-                    'β(TFI)': '{:.2e}',
-                    'p(TFI)': '{:.2e}',
-                }),
+                display,
+                column_config={
+                    'OFI-only R2': st.column_config.NumberColumn('OFI-only R²', format='%.4f'),
+                    'TFI-only R2': st.column_config.NumberColumn('TFI-only R²', format='%.4f'),
+                    'Combined R2': st.column_config.NumberColumn('Combined R²', format='%.4f'),
+                    'R2 Gain': st.column_config.NumberColumn('R² Gain', format='%.4f'),
+                    'Beta OFI': st.column_config.NumberColumn('β(OFI)', format='%.2e'),
+                    'p OFI': st.column_config.NumberColumn('p(OFI)', format='%.2e'),
+                    'Beta TFI': st.column_config.NumberColumn('β(TFI)', format='%.2e'),
+                    'p TFI': st.column_config.NumberColumn('p(TFI)', format='%.2e'),
+                },
                 use_container_width=True,
                 hide_index=True
             )
