@@ -1549,7 +1549,7 @@ def render_ti_comparison(market_config, raw_ofi_df):
                 yaxis_title="Time Window",
                 height=450
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"tfi_heatmap_{phase}")
 
         # Full results table
         st.markdown("---")
@@ -1676,7 +1676,7 @@ def render_ti_comparison(market_config, raw_ofi_df):
             yaxis_title="Time Window",
             height=450
         )
-        st.plotly_chart(fig_ofi, use_container_width=True)
+        st.plotly_chart(fig_ofi, use_container_width=True, key="cmp_ofi_heatmap")
 
         # 2. TFI heatmap
         st.markdown(f"### TFI R² — {selected_phase}")
@@ -1701,7 +1701,7 @@ def render_ti_comparison(market_config, raw_ofi_df):
             yaxis_title="Time Window",
             height=450
         )
-        st.plotly_chart(fig_tfi, use_container_width=True)
+        st.plotly_chart(fig_tfi, use_container_width=True, key="cmp_tfi_heatmap")
 
         # 3. Difference heatmap (OFI - TFI)
         st.markdown(f"### Difference (OFI - TFI) — {selected_phase}")
@@ -1731,7 +1731,7 @@ def render_ti_comparison(market_config, raw_ofi_df):
             yaxis_title="Time Window",
             height=450
         )
-        st.plotly_chart(fig_diff, use_container_width=True)
+        st.plotly_chart(fig_diff, use_container_width=True, key="cmp_diff_heatmap")
 
         # Summary stats
         st.markdown("---")
